@@ -609,8 +609,13 @@ class GeneralLayout(scrolled.ScrolledPanel):
         CatIn = (str(soup.body.find_all('strong')[6]).split('>')[1].split('<')[0]) + '\n' + \
                 str(soup.body.find_all('strong')[7]).split('>')[1].split('<')[0]
         CatIn += '\n\nZdjęć:' + str(len(soup.body.find_all('div', class_='pet-detail-gallery-column-photo')))
-        if 'facebook' not in str(soup.body.find_all('strong')[8]):
-            CatIn += '\n\n' + str(soup.body.find_all('strong')[8]).replace('<strong>', '').replace('</strong>', '')
+        try:
+            if 'facebook' not in str(soup.body.find_all('strong')[8]):
+                CatIn += '\n\n' + str(soup.body.find_all('strong')[8]).replace('<strong>', '').replace('</strong>', '')
+        except IndexError:
+            print('Problem with' + link)
+            # print(soup.body.find_all('strong'))
+            # print(len(soup.body.find_all('strong')))
 
         #     soup.body.find_all('strong')[7]
 
