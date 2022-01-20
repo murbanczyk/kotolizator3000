@@ -334,11 +334,15 @@ class GeneralLayout(scrolled.ScrolledPanel):
                     len(np.where(lataR >= 8)[0])))
 
         ax1.set_xticks(range(0, 12))
-
+        ymax=[]
         for pp in patches:
-            x = (pp._x0 + pp._x1) / 2
-            y = pp._y1 + 0.3
-            ax1.text(x, y, int(pp._y1), ha='center')
+            # print(pp._x0)
+            # print(pp._width)
+            x = (pp._x0) + (pp._width) / 2
+            y = pp._height  + 0.3
+            ymax.append(y)
+            ax1.text(x, y, int(pp._height), ha='center')
+        ax1.set_ylim([0,max(ymax)+0.5])
 
         #     ax1.set_title('Koty do 1 roku, suma: '  + str(round(sum(a1))))
         ax1.set_xlabel('miesiące')
@@ -357,11 +361,19 @@ class GeneralLayout(scrolled.ScrolledPanel):
         else:
             ax2.set_ylabel('Liczba psów')
             ax1.set_ylabel('Liczba psów')
+        ymax=[]
 
         for pp in patches2:
-            x = (pp._x0 + pp._x1) / 2
-            y = pp._y1 + 0.3
-            ax2.text(x, y, int(pp._y1), ha='center')
+            x = (pp._x0) + (pp._width) / 2
+            y = pp._height + 0.3
+            ymax.append(y)
+
+            ax2.text(x, y, int(pp._height), ha='center')
+            #
+            # x = (pp._x0 + pp._x1) / 2
+            # y = pp._y1 + 0.3
+            # ax2.text(x, y, int(pp._y1), ha='center')
+        ax2.set_ylim([0,max(ymax)+0.5])
 
         return lata
 
