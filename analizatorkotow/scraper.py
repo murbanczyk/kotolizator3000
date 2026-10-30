@@ -99,21 +99,37 @@ class PaluchScraper:
 
     @staticmethod
     def get_max_page(soup):
-        # podaje liczbe podstron do sciagania
-        nums = [1]
-        for link in soup.findAll('a', attrs={'href': re.compile("pet_page=")}):
-            m = re.search(r'pet_page=(\d+)', link.get('href'))
+        # podaje liczbe podstron do sciagania; None gdy na stronie nie ma paginacji
+        nums = []
+        for link in soup.findAll('a', href=True):
+            m = re.search(r'(?:pet_page=|/page/)(\d+)', link.get('href'))
             if m:
                 nums.append(int(m.group(1)))
-        return max(nums)
+        return max(nums) if nums else None
 
-    def get_all_cat_links(self, linkMain, linkEnd):
+    def get_all_cat_links(self, linkMain, linkEnd, required=True, max_pages=100):
         first = linkMain + '1' + linkEnd
         soup = self.getsoup(first, referer=BASE_URL, parser='lxml')
         links = self.get_links_to_cats(soup, [])  # strona 1 nie jest pobierana drugi raz
-        for k in range(2, self.get_max_page(soup) + 1):
-            soup = self.getsoup(linkMain + str(k) + linkEnd, referer=first)
-            links = self.get_links_to_cats(soup, links)
+        if not links:
+            if required:
+                title = soup.title.get_text(strip=True) if soup.title else ''
+                raise ValueError('Na stronie ' + first + ' nie znaleziono żadnych zwierząt (tytuł strony: "' +
+                                 title + '"). Strona mogła zablokować pobieranie albo zmienić wygląd.')
+            return []
+        maxcount = self.get_max_page(soup)
+        if maxcount is not None:
+            for k in range(2, maxcount + 1):
+                soup = self.getsoup(linkMain + str(k) + linkEnd, referer=first)
+                links = self.get_links_to_cats(soup, links)
+        else:
+            # brak rozpoznawalnej paginacji - pobieramy kolejne strony, dopóki pojawiają się nowe zwierzaki
+            for k in range(2, max_pages + 1):
+                known = len(set(links))
+                soup = self.getsoup(linkMain + str(k) + linkEnd, referer=first)
+                links = self.get_links_to_cats(soup, links)
+                if len(set(links)) == known:
+                    break
         return list(dict.fromkeys(links))
 
     # --- szczegoly zwierzecia ---

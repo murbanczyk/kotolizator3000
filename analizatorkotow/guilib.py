@@ -568,9 +568,10 @@ class GeneralLayout(scrolled.ScrolledPanel):
         scraper = PaluchScraper(self.my_datadir2 + 'cache.kotolizer')
         links = []
         try:
-            for linkMain in ('https://napaluchu.waw.pl/zwierzeta/zwierzeta-do-adopcji/?pet_page=',
-                             'https://napaluchu.waw.pl/zwierzeta/ostatnio-znalezione/?pet_page='):
-                links += scraper.get_all_cat_links(linkMain, linkEnd)
+            # lista "ostatnio znalezione" może być pusta, lista do adopcji nie
+            for linkMain, required in (('https://napaluchu.waw.pl/zwierzeta/zwierzeta-do-adopcji/?pet_page=', True),
+                                       ('https://napaluchu.waw.pl/zwierzeta/ostatnio-znalezione/?pet_page=', False)):
+                links += scraper.get_all_cat_links(linkMain, linkEnd, required=required)
         except Exception as e:
             print('Nie udało się pobrać listy zwierząt: ' + str(e))
             wx.CallAfter(self.parse_failed, str(e))
