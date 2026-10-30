@@ -14,6 +14,12 @@ from urllib3.util.retry import Retry
 
 BASE_URL = 'https://napaluchu.waw.pl/'
 
+# listy zwierzat do adopcji (cala lista miesci sie na jednej stronie)
+LIST_URLS = {
+    'koty': BASE_URL + 'zwierzeta/koty-do-adopcji/',
+    'psy': BASE_URL + 'zwierzeta/psy-do-adopcji/',
+}
+
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
                   '(KHTML, like Gecko) Chrome/124.0 Safari/537.36',
@@ -30,28 +36,31 @@ class BlockedError(Exception):
 class PaluchScraper:
     """Pobiera dane ze strony schroniska oszczedzajac polaczenia.
 
-    - jedna sesja HTTP (keep-alive) zamiast nowego polaczenia na kazde zapytanie,
-    - naglowki przegladarki, odstepy z losowym jitterem i ponawianie z backoffem
+    Wszystkie potrzebne dane (imie, numer, wiek, plec, zdjecie, "pilne") sa na
+    stronach z lista zwierzat, wiec nie pobieramy stron poszczegolnych zwierzat:
+    jedno uruchomienie to 3 strony (lista + lista samic + lista samcow) oraz
+    miniatury tylko tych zwierzat, ktorych zdjec nie ma jeszcze w pamieci podrecznej.
+
+    - jedna sesja HTTP (keep-alive), naglowki przegladarki i Referer,
+    - odstepy z losowym jitterem i ponawianie z backoffem
       (z respektowaniem Retry-After) przy 429/5xx,
-    - dyskowa pamiec podreczna szczegolow zwierzat (razem z miniaturka zdjecia),
-      wiec przy kolejnych uruchomieniach pobierane sa tylko nowe zwierzaki
-      lub te, ktorych dane sa starsze niz cache_days.
+    - po 403/429 dalsze zdjecia nie sa pobierane (wstawiany jest pusty obrazek).
     """
 
-    def __init__(self, cache_path, cache_days=7, delay=(1.0, 2.5)):
+    def __init__(self, cache_path, delay=(1.0, 2.5)):
         self.cache_path = str(cache_path)
-        self.cache_max_age = cache_days * 24 * 3600
         self.delay = delay
         self._last_request = 0.0
+        self.blocked = False
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
         retry = Retry(total=4, backoff_factor=2, status_forcelist=(429, 500, 502, 503, 504),
                       allowed_methods=('GET',), respect_retry_after_header=True,
                       raise_on_status=False)
-        adapter = HTTPAdapter(max_retries=retry, pool_connections=1, pool_maxsize=1)
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=2, pool_maxsize=1)
         self.session.mount('https://', adapter)
         self.session.mount('http://', adapter)
-        self.cache = self._load_cache()
+        self.cache = self._load_cache()  # url zdjecia -> miniatura w PNG
 
     # --- pamiec podreczna ---
 
@@ -85,120 +94,106 @@ class PaluchScraper:
         response.raise_for_status()
         return response
 
-    def getsoup(self, url, referer=None, parser='html.parser'):
-        return BeautifulSoup(self._get(url, referer).text, parser)
+    def getsoup(self, url, referer=None):
+        return BeautifulSoup(self._get(url, referer).text, 'lxml')
 
     # --- listy zwierzat ---
 
     @staticmethod
-    def get_links_to_cats(soup, links):
-        # sciaga linki z danej podstrony
-        for link in soup.findAll('a', attrs={'href': re.compile("/pet/")}):
-            links.append(link.get('href'))
-        return links
-
-    @staticmethod
-    def get_max_page(soup):
-        # podaje liczbe podstron do sciagania; None gdy na stronie nie ma paginacji
-        nums = []
-        for link in soup.findAll('a', href=True):
-            m = re.search(r'(?:pet_page=|/page/)(\d+)', link.get('href'))
+    def parse_cards(soup):
+        """Zwraca liste slownikow z danymi zwierzat z kart na stronie listy."""
+        animals = []
+        for card in soup.select('li.post-card'):
+            title = card.find('h3')
+            link = title.find('a', href=True) if title else None
+            if link is None or '/animal/' not in link['href']:
+                continue
+            text = link.get_text(' ', strip=True)
+            m = re.match(r'(?:(.*?)\s*[\u2013\u2014-]\s*)?(\d+)/(\d+)\s*$', text)
             if m:
-                nums.append(int(m.group(1)))
-        return max(nums) if nums else None
+                name, number, year = m.group(1) or '', m.group(2), m.group(3)
+            else:
+                name = text
+                m = re.search(r'/animal/(\d+)-(\d+)', link['href'])
+                number, year = (m.group(1), m.group(2)) if m else ('0', '')
+            fields = {}
+            for item in card.select('.fusion-li-item-content'):
+                label = item.find('strong')
+                if label is not None:
+                    key = label.get_text(strip=True).rstrip(':')
+                    label.extract()
+                    fields[key] = item.get_text(' ', strip=True)
+            img = card.find('img')
+            imgurl = (img.get('data-src') or img.get('src')) if img is not None else None
+            if imgurl and imgurl.startswith('data:'):
+                imgurl = img.get('data-orig-src') or img.get('data-lazy-src')
+            animals.append({
+                'link': link['href'],
+                'name': name,
+                'number': number,
+                'year': year,
+                'breed': fields.get('Rasa', ''),
+                'age': fields.get('Wiek', ''),
+                'image': imgurl,
+                'urgent': 'pilnej adopcji' in card.get_text(' ', strip=True).lower(),
+                'sex': '',
+            })
+        return animals
 
-    def get_all_cat_links(self, linkMain, linkEnd, required=True, max_pages=100):
-        first = linkMain + '1' + linkEnd
-        soup = self.getsoup(first, referer=BASE_URL, parser='lxml')
-        links = self.get_links_to_cats(soup, [])  # strona 1 nie jest pobierana drugi raz
-        if not links:
-            if required:
-                title = soup.title.get_text(strip=True) if soup.title else ''
-                raise ValueError('Na stronie ' + first + ' nie znaleziono żadnych zwierząt (tytuł strony: "' +
-                                 title + '"). Strona mogła zablokować pobieranie albo zmienić wygląd.')
-            return []
-        maxcount = self.get_max_page(soup)
-        if maxcount is not None:
-            for k in range(2, maxcount + 1):
-                soup = self.getsoup(linkMain + str(k) + linkEnd, referer=first)
-                links = self.get_links_to_cats(soup, links)
-        else:
-            # brak rozpoznawalnej paginacji - pobieramy kolejne strony, dopóki pojawiają się nowe zwierzaki
-            for k in range(2, max_pages + 1):
-                known = len(set(links))
-                soup = self.getsoup(linkMain + str(k) + linkEnd, referer=first)
-                links = self.get_links_to_cats(soup, links)
-                if len(set(links)) == known:
-                    break
-        return list(dict.fromkeys(links))
+    def get_list(self, url, referer=None, max_pages=20):
+        """Pobiera liste zwierzat; idzie za linkiem do nastepnej strony, jesli taki jest."""
+        animals = []
+        for _ in range(max_pages):
+            soup = self.getsoup(url, referer=referer)
+            animals += self.parse_cards(soup)
+            nxt = soup.select_one('.pagination a.pagination-next[href], .pagination a[rel=next][href]')
+            if nxt is None:
+                break
+            referer, url = url, urljoin(url, nxt['href'])
+        return animals
 
-    # --- szczegoly zwierzecia ---
+    def get_animals(self, species):
+        """Zwraca liste zwierzat danego gatunku ('koty' lub 'psy') z uzupelniona plcia."""
+        base = LIST_URLS[species]
+        animals = self.get_list(base, referer=BASE_URL)
+        if not animals:
+            raise ValueError('Na stronie ' + base + ' nie znaleziono żadnych zwierząt. '
+                             'Strona mogła zablokować pobieranie albo zmienić wygląd.')
+        bylink = dict((a['link'], a) for a in animals)
+        animals = list(bylink.values())
+        for sex in ('samica', 'samiec'):
+            try:
+                for a in self.get_list(base + 'plec-' + sex + '/', referer=base):
+                    if a['link'] in bylink:
+                        bylink[a['link']]['sex'] = sex
+            except BlockedError:
+                raise
+            except Exception as e:
+                print('Nie udało się pobrać listy ' + sex + ': ' + str(e))
+        return animals
 
-    def get_cat_details(self, link, referer=None):
-        """Zwraca (CatID, CatName, CatAge, CatIn, CatDesc, CatStat, CatImage, from_cache)."""
-        entry = self.cache.get(link)
-        if entry is not None and time.time() - entry['time'] < self.cache_max_age:
-            return self._unpack(entry) + (True,)
-        try:
-            data = self._fetch_cat_details(link, referer)
-        except BlockedError:
-            raise
-        except Exception as e:
-            print('Problem z ' + link + ': ' + str(e))
-            if entry is not None:  # lepiej stare dane niz brak zwierzaka
-                return self._unpack(entry) + (True,)
-            return (0, 0, 0, 0, 0, '', 0, False)
-        self.cache[link] = data
-        return self._unpack(data) + (False,)
+    # --- zdjecia ---
 
-    @staticmethod
-    def _unpack(entry):
-        image = entry['image']
-        if image is not None:
-            image = Image.open(BytesIO(image))
-            image.load()
-        else:
-            image = 0
-        return (entry['id'], entry['name'], entry['age'], entry['in'], entry['desc'], entry['stat'], image)
-
-    def _fetch_cat_details(self, link, referer):
-        url = urljoin(BASE_URL, link)
-        soup = self.getsoup(url, referer=referer)
-        strongs = soup.body.find_all('strong')
-        CatStat = str(strongs[5])
-        if any(s in CatStat for s in ("tymczaso", "fundacja")):
-            # zwierzak pominiety - zapamietujemy tylko status, bez pobierania zdjecia
-            return {'time': time.time(), 'id': 0, 'name': 0, 'age': 0, 'in': 0, 'desc': 0,
-                    'stat': CatStat, 'image': None}
-
-        CatID = int(str(soup.body.find_all('h2')[0]).split(' ')[-1].split('>')[1].split('/')[0])
-        CatName = str(soup.body.find_all('h2')[0]).split(' ')[0].split('>')[1] + '\n' + \
-                  str(strongs[2]).split('>')[1].split('<')[0]
-        CatAge = str(str(strongs[1]).split('>')[1].split('</')[0])
-        CatIn = (str(strongs[6]).split('>')[1].split('<')[0]) + '\n' + \
-                str(strongs[7]).split('>')[1].split('<')[0]
-        CatIn += '\n\nZdjęć:' + str(len(soup.body.find_all('div', class_='pet-detail-gallery-column-photo')))
-        try:
-            if 'facebook' not in str(strongs[8]):
-                CatIn += '\n\n' + str(strongs[8]).replace('<strong>', '').replace('</strong>', '')
-        except IndexError:
-            print('Problem with' + link)
-        CatDesc = str(soup.body.find_all('div', class_='pet-description')).split('>')[1].split('<')[0].split(
-            'Zapraszamy do zapoznania się z ankietą')[0]
-        if "pilne" in CatStat:
-            CatIn += '\n\nPILNE'
-        if 'Ochota na Kota' in CatStat:
-            CatIn += '\n\nOchota na Kota'
-
-        imgurl = str(soup.body.find_all('img', class_='pet-detail-main-image')).split('data-src=')[1].split(' ')[0] \
-            .replace('"', '')
-        image = Image.open(BytesIO(self._get(urljoin(url, imgurl), referer=url).content))
-        fixed_height = 150
-        height_percent = (fixed_height / float(image.size[0]))
-        width_size = int((float(image.size[1]) * float(height_percent)))
-        image = image.convert('RGB').resize((fixed_height, width_size), Image.NEAREST)
-        buf = BytesIO()
-        image.save(buf, format='PNG')
-
-        return {'time': time.time(), 'id': CatID, 'name': CatName, 'age': CatAge, 'in': CatIn,
-                'desc': CatDesc, 'stat': CatStat, 'image': buf.getvalue()}
+    def get_thumbnail(self, url, referer=None, fixed_height=150):
+        """Miniatura zdjecia; pobierana tylko raz, potem brana z pamieci podrecznej."""
+        data = self.cache.get(url) if url else None
+        if data is None and url and not self.blocked:
+            try:
+                image = Image.open(BytesIO(self._get(url, referer=referer).content))
+                height_percent = (fixed_height / float(image.size[0]))
+                width_size = int((float(image.size[1]) * float(height_percent)))
+                image = image.convert('RGB').resize((fixed_height, width_size), Image.NEAREST)
+                buf = BytesIO()
+                image.save(buf, format='PNG')
+                data = buf.getvalue()
+                self.cache[url] = data
+            except BlockedError as e:
+                print('Strona blokuje zapytania (' + str(e) + '), pomijam pozostałe zdjęcia')
+                self.blocked = True
+            except Exception as e:
+                print('Problem ze zdjęciem ' + str(url) + ': ' + str(e))
+        if data is None:
+            return Image.new('RGB', (fixed_height, fixed_height * 3 // 4), 'white')
+        image = Image.open(BytesIO(data))
+        image.load()
+        return image

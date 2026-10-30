@@ -23,7 +23,7 @@ from docx.shared import Mm, Cm, Pt
 from io import StringIO, BytesIO
 from pkg_resources import resource_filename
 from threading import Thread
-from .scraper import PaluchScraper, BlockedError
+from .scraper import PaluchScraper
 import matplotlib
 matplotlib.use('Agg')
 
@@ -559,60 +559,33 @@ class GeneralLayout(scrolled.ScrolledPanel):
     def parsepaluch2(self):
         self.psy.Enabled=False
         self.koty.Enabled=False
-        if self.kotybool:
-            linkEnd = '&pet_species=2'  # Koty
-        else:
-            linkEnd = '&pet_species=1'  # PSY
         wx.CallAfter(self.postep.SetValue, 10)
 
-        scraper = PaluchScraper(self.my_datadir2 + 'cache.kotolizer')
-        links = []
+        scraper = PaluchScraper(self.my_datadir2 + 'zdjecia.kotolizer')
         try:
-            # lista "ostatnio znalezione" może być pusta, lista do adopcji nie
-            for linkMain, required in (('https://napaluchu.waw.pl/zwierzeta/zwierzeta-do-adopcji/?pet_page=', True),
-                                       ('https://napaluchu.waw.pl/zwierzeta/ostatnio-znalezione/?pet_page=', False)):
-                links += scraper.get_all_cat_links(linkMain, linkEnd, required=required)
+            animals = scraper.get_animals('koty' if self.kotybool else 'psy')
         except Exception as e:
             print('Nie udało się pobrać listy zwierząt: ' + str(e))
             wx.CallAfter(self.parse_failed, str(e))
             return
-        links = list(dict.fromkeys(links))
-        wx.CallAfter(self.postep.SetRange, len(links) + 1)
+        wx.CallAfter(self.postep.SetRange, len(animals) + 1)
         wx.CallAfter(self.postep.SetValue, 1)
         rows = []
-        opo = 1
-        fetched = 0
-        blocked = False
-        for countlinks, k in enumerate(links):
-            if blocked:
-                # strona nas blokuje - bierzemy tylko to, co jest w pamięci podręcznej
-                entry = scraper.cache.get(k)
-                if entry is None:
-                    continue
-                details = scraper._unpack(entry)
-            else:
-                try:
-                    details = scraper.get_cat_details(k, referer=linkMain + '1' + linkEnd)
-                except BlockedError as e:
-                    print('Strona blokuje zapytania (' + str(e) + '), używam danych z pamięci podręcznej')
-                    blocked = True
-                    entry = scraper.cache.get(k)
-                    if entry is None:
-                        continue
-                    details = scraper._unpack(entry)
-                else:
-                    if not details[7]:
-                        fetched += 1
-                        if fetched % 20 == 0:
-                            scraper.save_cache()
-            CatID, CatName, CatAge, CatIn, CatDesc, CatStat, CatImage = details[:7]
-            if CatID != 0:
-                rows.append({'Nr': opo, 'ID': CatID, 'Imię': CatName, 'Wiek': CatAge, 'Przyjęcie': CatIn,
-                             'Foto': CatImage, 'Ogłoszenie': CatDesc})
-                opo += 1
-            wx.CallAfter(self.postep.SetValue, countlinks)
+        downloaded = 0
+        for count, a in enumerate(animals):
+            if a['image'] and a['image'] not in scraper.cache:
+                downloaded += 1
+            CatImage = scraper.get_thumbnail(a['image'], referer=a['link'])
+            if downloaded and downloaded % 20 == 0:
+                scraper.save_cache()
+            CatIn = 'Rasa: ' + a['breed']
+            if a['urgent']:
+                CatIn += '\n\nPILNE'
+            rows.append({'Nr': count + 1, 'ID': int(a['number']), 'Imię': a['name'] + '\n' + a['sex'],
+                         'Wiek': a['age'], 'Przyjęcie': CatIn, 'Foto': CatImage, 'Ogłoszenie': ''})
+            wx.CallAfter(self.postep.SetValue, count + 1)
         scraper.save_cache()
-        print('Pobrano szczegóły %d zwierząt, %d z pamięci podręcznej' % (fetched, len(links) - fetched))
+        print('Zwierząt: %d, pobranych zdjęć: %d' % (len(animals), downloaded))
         self.catframe = pd.DataFrame(rows, columns=['Nr', 'ID', 'Imię', 'Wiek', 'Przyjęcie', 'Foto', 'Ogłoszenie'])
         if self.kotybool:
             self.catframe.to_pickle(self.my_datadir2 + 'Miau' +self.today +'.kotolizer', compression='bz2')
@@ -621,7 +594,7 @@ class GeneralLayout(scrolled.ScrolledPanel):
             self.catframe.to_pickle(self.my_datadir2 + 'Hau' +self.today +'.kotolizer', compression='bz2')
             self.newgen[1]=True
 
-        wx.CallAfter(self.postep.SetValue, len(links) + 1)
+        wx.CallAfter(self.postep.SetValue, len(animals) + 1)
 
         self.word1.Enabled = True
         self.histogram1.Enabled = True
