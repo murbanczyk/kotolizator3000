@@ -8,7 +8,6 @@ import pandas as pd
 import pathlib
 import platform
 import re
-import requests
 import shutil
 import subprocess
 import sys
@@ -17,7 +16,6 @@ import wx.adv
 import wx.lib.scrolledpanel as scrolled
 # from IPython.core.display import HTML
 from PIL import Image
-from bs4 import BeautifulSoup
 from datetime import date
 from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls
@@ -25,6 +23,7 @@ from docx.shared import Mm, Cm, Pt
 from io import StringIO, BytesIO
 from pkg_resources import resource_filename
 from threading import Thread
+from .scraper import PaluchScraper, LIST_URLS
 import matplotlib
 matplotlib.use('Agg')
 
@@ -560,30 +559,47 @@ class GeneralLayout(scrolled.ScrolledPanel):
     def parsepaluch2(self):
         self.psy.Enabled=False
         self.koty.Enabled=False
-        linkMain = 'https://napaluchu.waw.pl/zwierzeta/zwierzeta-do-adopcji/?pet_page='
-        if self.kotybool:
-
-            linkEnd = '&pet_species=2'  # Koty
-        else:
-            linkEnd = '&pet_species=1'  # PSY
         wx.CallAfter(self.postep.SetValue, 10)
 
-        links = self.get_all_cat_links(linkMain, linkEnd)
-
-        linkMain = 'https://napaluchu.waw.pl/zwierzeta/ostatnio-znalezione/?pet_page='
-        links = np.concatenate((links, self.get_all_cat_links(linkMain, linkEnd)))
-        wx.CallAfter(self.postep.SetRange, len(links) + 1)
+        scraper = PaluchScraper(self.my_datadir2 + 'cache.kotolizer')
+        try:
+            animals = scraper.get_animals('koty' if self.kotybool else 'psy')
+        except Exception as e:
+            print('Nie udało się pobrać listy zwierząt: ' + str(e))
+            wx.CallAfter(self.parse_failed, str(e))
+            return
+        wx.CallAfter(self.postep.SetRange, len(animals) + 1)
         wx.CallAfter(self.postep.SetValue, 1)
-        self.catframe = pd.DataFrame(columns=['Nr', 'ID', 'Imię', 'Wiek', 'Przyjęcie', 'Foto', 'Ogłoszenie'])
-        opo = 1
-        for countlinks, k in enumerate(links):
-            CatID, CatName, CatAge, CatIn, CatDesc, CatStat, CatImage = self.get_cat_details(k)
-            if CatID != 0:
-                new_row = {'Nr': opo, 'ID': CatID, 'Imię': CatName, 'Wiek': CatAge, 'Przyjęcie': CatIn,
-                           'Foto': CatImage, 'Ogłoszenie': CatDesc}
-                self.catframe = self.catframe.append(new_row, ignore_index=True)
-                wx.CallAfter(self.postep.SetValue, countlinks)
-                opo += 1
+        rows = []
+        fetched = 0
+        for count, a in enumerate(animals):
+            details, new = scraper.get_details(a['link'], referer=LIST_URLS['koty' if self.kotybool else 'psy'])
+            if new:
+                fetched += 1
+                if fetched % 20 == 0:
+                    scraper.save_cache()
+            details = details or {}
+            CatImage = scraper.get_thumbnail(a['image'], referer=a['link'])
+            location = details.get('location', '')
+            if location == 'Brak danych':
+                location = ''
+            if 'Ochota' in location and 'Ochota na Kota' not in location:
+                location += ' (Ochota na Kota)'
+            CatIn = details.get('date', '')
+            CatIn += '\n\nZdjęć:' + str(details.get('photos', ''))
+            CatIn += '\n\nRasa: ' + a['breed']
+            if a['urgent']:
+                CatIn += '\n\nPILNE'
+            if location:
+                CatIn += '\n\n' + location  # ostatnia linia jest używana w statystyce "Miejsca"
+            rows.append({'Nr': count + 1, 'ID': int(a['number']),
+                         'Imię': a['name'] + '\n' + details.get('sex', a['sex']),
+                         'Wiek': a['age'], 'Przyjęcie': CatIn, 'Foto': CatImage,
+                         'Ogłoszenie': details.get('desc', '')})
+            wx.CallAfter(self.postep.SetValue, count + 1)
+        scraper.save_cache()
+        print('Zwierząt: %d, pobranych stron zwierząt: %d' % (len(animals), fetched))
+        self.catframe = pd.DataFrame(rows, columns=['Nr', 'ID', 'Imię', 'Wiek', 'Przyjęcie', 'Foto', 'Ogłoszenie'])
         if self.kotybool:
             self.catframe.to_pickle(self.my_datadir2 + 'Miau' +self.today +'.kotolizer', compression='bz2')
             self.newgen[0]=True
@@ -591,7 +607,7 @@ class GeneralLayout(scrolled.ScrolledPanel):
             self.catframe.to_pickle(self.my_datadir2 + 'Hau' +self.today +'.kotolizer', compression='bz2')
             self.newgen[1]=True
 
-        wx.CallAfter(self.postep.SetValue, len(links) + 1)
+        wx.CallAfter(self.postep.SetValue, len(animals) + 1)
 
         self.word1.Enabled = True
         self.histogram1.Enabled = True
@@ -602,82 +618,11 @@ class GeneralLayout(scrolled.ScrolledPanel):
         self.wordOld.Enabled=True
         self.wordNew.Enabled=True
 
-        # self.nowedane.Enabled=True
-
-        # links2=get_all_cat_links(linkMain,linkEnd)
-
-    def get_cat_details(self, link):
-        # ll=links[1]
-
-        soup = self.getsoup('https://napaluchu.waw.pl/' + link)
-        CatStat = str(soup.body.find_all('strong')[5])
-        #     CatStat+='\n\n'
-        #     CatStat+=str(soup.body.find_all('strong')[8])
-        CatID = int(str(soup.body.find_all('h2')[0]).split(' ')[-1].split('>')[1].split('/')[0])
-        CatName = str(soup.body.find_all('h2')[0]).split(' ')[0].split('>')[1] + '\n' + \
-                  str(soup.body.find_all('strong')[2]).split('>')[1].split('<')[0]
-        CatAge = str(str(soup.body.find_all('strong')[1]).split('>')[1].split('</')[0])
-        # soup.body.find('div', {'class':"autocontainer"})
-        CatIn = (str(soup.body.find_all('strong')[6]).split('>')[1].split('<')[0]) + '\n' + \
-                str(soup.body.find_all('strong')[7]).split('>')[1].split('<')[0]
-        CatIn += '\n\nZdjęć:' + str(len(soup.body.find_all('div', class_='pet-detail-gallery-column-photo')))
-        try:
-            if 'facebook' not in str(soup.body.find_all('strong')[8]):
-                CatIn += '\n\n' + str(soup.body.find_all('strong')[8]).replace('<strong>', '').replace('</strong>', '')
-        except IndexError:
-            print('Problem with' + link)
-            # print(soup.body.find_all('strong'))
-            # print(len(soup.body.find_all('strong')))
-
-        #     soup.body.find_all('strong')[7]
-
-        ImagePath = requests.get(
-            str(soup.body.find_all('img', class_='pet-detail-main-image')).split('data-src=')[1].split(' ')[0].replace(
-                '"', ''))
-        fixed_height = 150
-        image = Image.open(BytesIO(ImagePath.content))
-        height_percent = (fixed_height / float(image.size[0]))
-        width_size = int((float(image.size[1]) * float(height_percent)))
-        CatImage = image.resize((fixed_height, width_size), PIL.Image.NEAREST)
-        CatDesc = str(soup.body.find_all('div', class_='pet-description')).split('>')[1].split('<')[0].split(
-            'Zapraszamy do zapoznania się z ankietą')[0]
-        if "pilne" in CatStat:
-            CatIn += '\n\nPILNE'
-        if 'Ochota na Kota' in CatStat:
-            CatIn += '\n\nOchota na Kota'
-
-        if not ("tymczaso" or "fundacja") in CatStat:
-            return CatID, CatName, CatAge, CatIn, CatDesc, CatStat, CatImage
-        else:
-            return 0, 0, 0, 0, 0, CatStat, 0
-
-    def get_links_to_cats(self, soup, links):
-        # sciaga linki z danej podstrony
-        # links = []
-        for link in soup.findAll('a', attrs={'href': re.compile("/pet/")}):
-            links.append(link.get('href'))
-        return links
-
-    def get_max_page(self, soup):
-        # podaje liczbe podstron do sciagania
-        nums = []
-        for link in soup.findAll('a', attrs={'href': re.compile("pet_page=")}):
-            nums.append(int(link.get('href').split('?')[1].split('=')[1].split('&')[0]))
-        return max(nums)
-
-    def getsoup(self, link):
-        odpowiedz = requests.get(link)
-        return BeautifulSoup(odpowiedz.text, 'html.parser')
-
-    def get_all_cat_links(self, linkMain, linkEnd):
-        odpowiedz = requests.get(linkMain + str(1) + linkEnd)
-        soup = BeautifulSoup(odpowiedz.text, 'lxml')
-        maxcount = self.get_max_page(soup)
-        links = []
-        for k in range(1, maxcount + 1):
-            soup = self.getsoup(linkMain + str(k) + linkEnd)
-            links = self.get_links_to_cats(soup, links)
-        return np.unique(links)
+    def parse_failed(self, message):
+        self.psy.Enabled = True
+        self.koty.Enabled = True
+        self.nowedane.Enabled = True
+        wx.MessageDialog(self, 'Nie udało się pobrać danych ze strony:\n' + message, 'Błąd').ShowModal()
 
     def getframecur(self, b):
         if b.Value != self.nadzis:
