@@ -23,7 +23,7 @@ from docx.shared import Mm, Cm, Pt
 from io import StringIO, BytesIO
 from pkg_resources import resource_filename
 from threading import Thread
-from .scraper import PaluchScraper
+from .scraper import PaluchScraper, LIST_URLS
 import matplotlib
 matplotlib.use('Agg')
 
@@ -561,7 +561,7 @@ class GeneralLayout(scrolled.ScrolledPanel):
         self.koty.Enabled=False
         wx.CallAfter(self.postep.SetValue, 10)
 
-        scraper = PaluchScraper(self.my_datadir2 + 'zdjecia.kotolizer')
+        scraper = PaluchScraper(self.my_datadir2 + 'cache.kotolizer')
         try:
             animals = scraper.get_animals('koty' if self.kotybool else 'psy')
         except Exception as e:
@@ -571,21 +571,34 @@ class GeneralLayout(scrolled.ScrolledPanel):
         wx.CallAfter(self.postep.SetRange, len(animals) + 1)
         wx.CallAfter(self.postep.SetValue, 1)
         rows = []
-        downloaded = 0
+        fetched = 0
         for count, a in enumerate(animals):
-            if a['image'] and a['image'] not in scraper.cache:
-                downloaded += 1
+            details, new = scraper.get_details(a['link'], referer=LIST_URLS['koty' if self.kotybool else 'psy'])
+            if new:
+                fetched += 1
+                if fetched % 20 == 0:
+                    scraper.save_cache()
+            details = details or {}
             CatImage = scraper.get_thumbnail(a['image'], referer=a['link'])
-            if downloaded and downloaded % 20 == 0:
-                scraper.save_cache()
-            CatIn = 'Rasa: ' + a['breed']
+            location = details.get('location', '')
+            if location == 'Brak danych':
+                location = ''
+            if 'Ochota' in location and 'Ochota na Kota' not in location:
+                location += ' (Ochota na Kota)'
+            CatIn = details.get('date', '')
+            CatIn += '\n\nZdjęć:' + str(details.get('photos', ''))
+            CatIn += '\n\nRasa: ' + a['breed']
             if a['urgent']:
                 CatIn += '\n\nPILNE'
-            rows.append({'Nr': count + 1, 'ID': int(a['number']), 'Imię': a['name'] + '\n' + a['sex'],
-                         'Wiek': a['age'], 'Przyjęcie': CatIn, 'Foto': CatImage, 'Ogłoszenie': ''})
+            if location:
+                CatIn += '\n\n' + location  # ostatnia linia jest używana w statystyce "Miejsca"
+            rows.append({'Nr': count + 1, 'ID': int(a['number']),
+                         'Imię': a['name'] + '\n' + details.get('sex', a['sex']),
+                         'Wiek': a['age'], 'Przyjęcie': CatIn, 'Foto': CatImage,
+                         'Ogłoszenie': details.get('desc', '')})
             wx.CallAfter(self.postep.SetValue, count + 1)
         scraper.save_cache()
-        print('Zwierząt: %d, pobranych zdjęć: %d' % (len(animals), downloaded))
+        print('Zwierząt: %d, pobranych stron zwierząt: %d' % (len(animals), fetched))
         self.catframe = pd.DataFrame(rows, columns=['Nr', 'ID', 'Imię', 'Wiek', 'Przyjęcie', 'Foto', 'Ogłoszenie'])
         if self.kotybool:
             self.catframe.to_pickle(self.my_datadir2 + 'Miau' +self.today +'.kotolizer', compression='bz2')

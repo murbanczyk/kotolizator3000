@@ -36,19 +36,25 @@ class BlockedError(Exception):
 class PaluchScraper:
     """Pobiera dane ze strony schroniska oszczedzajac polaczenia.
 
-    Wszystkie potrzebne dane (imie, numer, wiek, plec, zdjecie, "pilne") sa na
-    stronach z lista zwierzat, wiec nie pobieramy stron poszczegolnych zwierzat:
-    jedno uruchomienie to 3 strony (lista + lista samic + lista samcow) oraz
-    miniatury tylko tych zwierzat, ktorych zdjec nie ma jeszcze w pamieci podrecznej.
+    Imie, numer, wiek, zdjecie i "pilne" sa na stronie z lista zwierzat (1 zapytanie).
+    Plec, data przyjecia, lokalizacja, opis i liczba zdjec sa tylko na stronie
+    zwierzecia - ta jest pobierana raz i trzymana w pamieci podrecznej przez
+    details_days dni. Miniatury zdjec sa pobierane tylko raz.
 
     - jedna sesja HTTP (keep-alive), naglowki przegladarki i Referer,
     - odstepy z losowym jitterem i ponawianie z backoffem
       (z respektowaniem Retry-After) przy 429/5xx,
-    - po 403/429 dalsze zdjecia nie sa pobierane (wstawiany jest pusty obrazek).
+    - po 403/429 nic wiecej nie jest pobierane; uzywane sa dane z pamieci
+      podrecznej (nawet starsze), a brakujace zdjecia zastepuje pusty obrazek.
     """
 
-    def __init__(self, cache_path, delay=(1.0, 2.5)):
+    DETAIL_LABELS = ('Typ rasy', 'Płeć', 'Data przyjęcia', 'Wiek', 'Identyfikator', 'Grupa Zwierząt',
+                     'Waga', 'Lokalizacja (boks)', 'Kastracja')
+    DESC_END = ('Zapraszamy do', 'Planujesz adopcję', 'Poradnik:', 'Zapraszamy do zapoznania się z ankietą')
+
+    def __init__(self, cache_path, details_days=7, delay=(1.0, 2.5)):
         self.cache_path = str(cache_path)
+        self.details_max_age = details_days * 24 * 3600
         self.delay = delay
         self._last_request = 0.0
         self.blocked = False
@@ -60,7 +66,9 @@ class PaluchScraper:
         adapter = HTTPAdapter(max_retries=retry, pool_connections=2, pool_maxsize=1)
         self.session.mount('https://', adapter)
         self.session.mount('http://', adapter)
-        self.cache = self._load_cache()  # url zdjecia -> miniatura w PNG
+        cache = self._load_cache()
+        self.images = cache.get('images', {})    # url zdjecia -> miniatura w PNG
+        self.details = cache.get('details', {})  # link do zwierzecia -> dane ze strony zwierzecia
 
     # --- pamiec podreczna ---
 
@@ -74,7 +82,7 @@ class PaluchScraper:
     def save_cache(self):
         try:
             with bz2.open(self.cache_path, 'wb') as f:
-                pickle.dump(self.cache, f)
+                pickle.dump({'images': self.images, 'details': self.details}, f)
         except Exception as e:
             print('Nie udalo sie zapisac cache: ' + str(e))
 
@@ -153,30 +161,65 @@ class PaluchScraper:
         return animals
 
     def get_animals(self, species):
-        """Zwraca liste zwierzat danego gatunku ('koty' lub 'psy') z uzupelniona plcia."""
+        """Zwraca liste zwierzat danego gatunku ('koty' lub 'psy')."""
         base = LIST_URLS[species]
         animals = self.get_list(base, referer=BASE_URL)
         if not animals:
             raise ValueError('Na stronie ' + base + ' nie znaleziono żadnych zwierząt. '
                              'Strona mogła zablokować pobieranie albo zmienić wygląd.')
-        bylink = dict((a['link'], a) for a in animals)
-        animals = list(bylink.values())
-        for sex in ('samica', 'samiec'):
-            try:
-                for a in self.get_list(base + 'plec-' + sex + '/', referer=base):
-                    if a['link'] in bylink:
-                        bylink[a['link']]['sex'] = sex
-            except BlockedError:
-                raise
-            except Exception as e:
-                print('Nie udało się pobrać listy ' + sex + ': ' + str(e))
-        return animals
+        return list(dict((a['link'], a) for a in animals).values())
+
+    # --- strona zwierzecia ---
+
+    @classmethod
+    def parse_details(cls, soup):
+        texts = [d.get_text(' ', strip=True) for d in soup.select('div.fusion-text')]
+        fields = {}
+        for i, t in enumerate(texts[:-1]):
+            if t in cls.DETAIL_LABELS and t not in fields:
+                fields[t] = texts[i + 1]
+        desc = ''
+        for h in soup.find_all(['h2', 'h3', 'h4']):
+            if h.get_text(strip=True) == 'Informacje':
+                body = h.find_next('div', class_='fusion-text')
+                if body is not None:
+                    desc = body.get_text('\n', strip=True)
+                break
+        for marker in cls.DESC_END:
+            desc = desc.split(marker)[0]
+        return {
+            'sex': fields.get('Płeć', '').lower(),
+            'date': fields.get('Data przyjęcia', ''),
+            'location': fields.get('Lokalizacja (boks)', ''),
+            'desc': desc.strip(),
+            'photos': len(soup.select('a.fusion-lightbox[data-rel^="iLightbox[gallery"]')),
+            'fields': fields,
+        }
+
+    def get_details(self, link, referer=None):
+        """Dane ze strony zwierzecia lub None. Zwraca (dane, czy_pobrano)."""
+        entry = self.details.get(link)
+        fresh = entry is not None and time.time() - entry['time'] < self.details_max_age
+        if fresh or self.blocked:
+            return entry, False
+        try:
+            data = self.parse_details(self.getsoup(link, referer=referer))
+        except BlockedError as e:
+            print('Strona blokuje zapytania (' + str(e) + '), dalej używam tylko pamięci podręcznej')
+            self.blocked = True
+            return entry, False
+        except Exception as e:
+            print('Problem z ' + link + ': ' + str(e))
+            return entry, False
+        data['time'] = time.time()
+        self.details[link] = data
+        return data, True
 
     # --- zdjecia ---
 
     def get_thumbnail(self, url, referer=None, fixed_height=150):
         """Miniatura zdjecia; pobierana tylko raz, potem brana z pamieci podrecznej."""
-        data = self.cache.get(url) if url else None
+        data = self.images.get(url) if url else None
         if data is None and url and not self.blocked:
             try:
                 image = Image.open(BytesIO(self._get(url, referer=referer).content))
@@ -186,9 +229,9 @@ class PaluchScraper:
                 buf = BytesIO()
                 image.save(buf, format='PNG')
                 data = buf.getvalue()
-                self.cache[url] = data
+                self.images[url] = data
             except BlockedError as e:
-                print('Strona blokuje zapytania (' + str(e) + '), pomijam pozostałe zdjęcia')
+                print('Strona blokuje zapytania (' + str(e) + '), dalej używam tylko pamięci podręcznej')
                 self.blocked = True
             except Exception as e:
                 print('Problem ze zdjęciem ' + str(url) + ': ' + str(e))
