@@ -26,7 +26,7 @@ from threading import Thread
 from .scraper import PaluchScraper, LIST_URLS
 import matplotlib
 from matplotlib.figure import Figure
-from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 
 def mainGui():
@@ -380,11 +380,11 @@ class GeneralLayout(scrolled.ScrolledPanel):
             a2, _, patches2 = ax2.hist(lataR, bins2, linewidth=1, edgecolor='w', color='k')
             if kotbool:
                 ax1.set_title('Koty do 1 roku, suma: ' + str(round(sum(a1))))
-                ax2.set_title('Koty wszystkie, suma: ' + str(round(sum(a2))) + ', starsze od 8 lat: ' + str(
+                ax2.set_title('Koty wszystkie, suma: ' + str(round(sum(a2))) + '\nstarsze od 8 lat: ' + str(
                     len(np.where(lataR >= 8)[0])))
             else:
                 ax1.set_title('Psy do 1 roku, suma: ' + str(round(sum(a1))))
-                ax2.set_title('Psy wszystkie, suma: ' + str(round(sum(a2))) + ', starsze od 8 lat: ' + str(
+                ax2.set_title('Psy wszystkie, suma: ' + str(round(sum(a2))) + '\nstarsze od 8 lat: ' + str(
                     len(np.where(lataR >= 8)[0])))
 
         elif sex == 'f':
@@ -399,11 +399,11 @@ class GeneralLayout(scrolled.ScrolledPanel):
             if kotbool:
 
                 ax1.set_title('Kotki do 1 roku, suma: ' + str(round(sum(a1))))
-                ax2.set_title('Kotki wszystkie, suma: ' + str(round(sum(a2))) + ', starsze od 8 lat: ' + str(
+                ax2.set_title('Kotki wszystkie, suma: ' + str(round(sum(a2))) + '\nstarsze od 8 lat: ' + str(
                     len(np.where(lataR >= 8)[0])))
             else:
                 ax1.set_title('Suczki do 1 roku, suma: ' + str(round(sum(a1))))
-                ax2.set_title('Suczki wszystkie, suma: ' + str(round(sum(a2))) + ', starsze od 8 lat: ' + str(
+                ax2.set_title('Suczki wszystkie, suma: ' + str(round(sum(a2))) + '\nstarsze od 8 lat: ' + str(
                     len(np.where(lataR >= 8)[0])))
 
 
@@ -422,11 +422,11 @@ class GeneralLayout(scrolled.ScrolledPanel):
             if kotbool:
 
                 ax1.set_title('Kocury do 1 roku, suma: ' + str(round(sum(a1))))
-                ax2.set_title('Kocury wszystkie, suma: ' + str(round(sum(a2))) + ', starsze od 8 lat: ' + str(
+                ax2.set_title('Kocury wszystkie, suma: ' + str(round(sum(a2))) + '\nstarsze od 8 lat: ' + str(
                     len(np.where(lataR >= 8)[0])))
             else:
                 ax1.set_title('Psy (samce) do 1 roku, suma: ' + str(round(sum(a1))))
-                ax2.set_title('Psy (samce) wszystkie, suma: ' + str(round(sum(a2))) + ', starsze od 8 lat: ' + str(
+                ax2.set_title('Psy (samce) wszystkie, suma: ' + str(round(sum(a2))) + '\nstarsze od 8 lat: ' + str(
                     len(np.where(lataR >= 8)[0])))
 
         ax1.set_xticks(range(0, 12))
@@ -438,7 +438,7 @@ class GeneralLayout(scrolled.ScrolledPanel):
             y = pp._height  + 0.3
             ymax.append(y)
             ax1.text(x, y, int(pp._height), ha='center')
-        ax1.set_ylim([0,max(ymax)+0.5])
+        ax1.set_ylim([0, max(ymax) * 1.15 + 0.5])
 
         #     ax1.set_title('Koty do 1 roku, suma: '  + str(round(sum(a1))))
         ax1.set_xlabel('miesiące')
@@ -469,7 +469,7 @@ class GeneralLayout(scrolled.ScrolledPanel):
             # x = (pp._x0 + pp._x1) / 2
             # y = pp._y1 + 0.3
             # ax2.text(x, y, int(pp._y1), ha='center')
-        ax2.set_ylim([0,max(ymax)+0.5])
+        ax2.set_ylim([0, max(ymax) * 1.15 + 0.5])
 
         return lata
 
@@ -710,16 +710,65 @@ class GeneralLayout(scrolled.ScrolledPanel):
     # create your program's directory
 
 
+class HistCanvas(wx.Panel):
+    """Pokazuje figurę matplotlib dopasowaną do rozmiaru okna.
+
+    Figura jest renderowana (Agg) do obrazka dokładnie w rozmiarze panelu,
+    w rozdzielczości ekranu (np. 2x na Retinie), więc skaluje się poprawnie
+    niezależnie od wersji matplotlib i wxPython.
+    """
+
+    def __init__(self, parent, fig):
+        wx.Panel.__init__(self, parent, style=wx.FULL_REPAINT_ON_RESIZE)
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.fig = fig
+        self.agg = FigureCanvasAgg(fig)
+        self.bmp = None
+        self.scale = 1.0
+        self.timer = wx.CallLater(1, self.render)
+        self.SetMinSize((300, 250))
+        self.Bind(wx.EVT_SIZE, self.on_size)
+        self.Bind(wx.EVT_PAINT, self.on_paint)
+
+    def on_size(self, event):
+        self.timer.Start(80)  # przerysuj dopiero, gdy użytkownik skończy zmieniać rozmiar
+        event.Skip()
+
+    def render(self):
+        w, h = self.GetClientSize()
+        if w < 10 or h < 10:
+            return
+        scale = self.GetContentScaleFactor() if hasattr(self, 'GetContentScaleFactor') else 1.0
+        self.fig.set_size_inches(w / 100.0, h / 100.0)
+        self.fig.set_dpi(100.0 * scale)
+        self.agg.draw()
+        W, H = self.agg.get_width_height()
+        self.bmp = wx.Bitmap.FromBufferRGBA(W, H, bytes(self.agg.buffer_rgba()))
+        self.scale = W / float(w)
+        self.Refresh()
+
+    def on_paint(self, event):
+        dc = wx.PaintDC(self)
+        dc.SetBackground(wx.WHITE_BRUSH)
+        dc.Clear()
+        if self.bmp is not None:
+            dc.SetUserScale(1.0 / self.scale, 1.0 / self.scale)
+            dc.DrawBitmap(self.bmp, 0, 0)
+
+
 class HistFrame(wx.Frame):
     """Okno z histogramem i przyciskiem do zapisania go jako obraz."""
 
+    SAVE_SIZE = (13, 11)  # rozmiar zapisywanego obrazka w calach (niezależny od rozmiaru okna)
+
     def __init__(self, parent, fig, title, defaultfile):
-        wx.Frame.__init__(self, parent, title=title, size=(1100, 900))
+        area = wx.Display(wx.Display.GetFromWindow(parent) if parent else 0).GetClientArea()
+        size = (min(1100, int(area.width * 0.9)), min(900, int(area.height * 0.9)))
+        wx.Frame.__init__(self, parent, title=title, size=size)
         self.fig = fig
         self.defaultfile = defaultfile
         panel = wx.Panel(self)
-        self.canvas = FigureCanvas(panel, -1, fig)
-        self.canvas.SetMinSize((300, 250))  # wykres dopasowuje się do rozmiaru okna
+        self.canvas = HistCanvas(panel, fig)
         save = wx.Button(panel, label='Zapisz…')
         Tooltipset(save, 'Zapisz histogram jako obraz PNG, PDF lub SVG')
         close = wx.Button(panel, label='Zamknij')
@@ -747,10 +796,13 @@ class HistFrame(wx.Frame):
         if not os.path.splitext(path)[1]:
             path += ext
         try:
+            self.fig.set_size_inches(*self.SAVE_SIZE)
             self.fig.savefig(path, dpi=150)
         except Exception as e:
             wx.MessageDialog(self, str(e), 'Błąd', wx.OK | wx.ICON_ERROR).ShowModal()
             return
+        finally:
+            self.canvas.render()  # przywróć rozmiar dopasowany do okna
         self.SetStatusText('Zapisano: ' + path)
 
 
