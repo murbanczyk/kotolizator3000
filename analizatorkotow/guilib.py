@@ -215,22 +215,25 @@ class GeneralLayout(scrolled.ScrolledPanel):
     def gencatxls(self):
 
         catframe = self.getframecur(self.backup)
-        xlscat = pd.DataFrame(columns=['Nr', 'ID', 'Imię', 'Wiek', 'Miejsce'])
+        rows = []
         opo=0
         for a, b in catframe.iterrows():
             opo+=1
-            Imie = b[2].split('\n')[0]
-            Miejsce = b[4].split('\n')[-1]
+            Imie = str(b['Imię']).split('\n')[0]
+            Miejsce = str(b['Przyjęcie']).split('\n')[-1]
             miejscatocheck = ['Azyl', 'Ochota', 'właściciela']
             if not any(ext in Miejsce for ext in miejscatocheck):
                 Miejsce = 'brak informacji'
-            if 'mies' in b[3]:
-                mies=int(b[3].split()[0])
-                if mies<4:
+            Wiek = str(b['Wiek'])
+            if 'mies' in Wiek:
+                try:
+                    mies=int(Wiek.split()[0])
+                except ValueError:
+                    mies = None
+                if mies is not None and mies<4:
                     Imie +='(m)'
-            new_row = {'Nr':opo, 'ID': b[1], 'Imię': Imie, 'Wiek': b[3], 'Miejsce': Miejsce}
-            xlscat = xlscat.append(new_row, ignore_index=True)
-        return xlscat
+            rows.append({'Nr':opo, 'ID': b['ID'], 'Imię': Imie, 'Wiek': Wiek, 'Miejsce': Miejsce})
+        return pd.DataFrame(rows, columns=['Nr', 'ID', 'Imię', 'Wiek', 'Miejsce'])
     def excellgen(self,event):
         xlscat=self.gencatxls()
         # xlscat.style.applymap('font-weight: bold',
