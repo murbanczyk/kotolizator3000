@@ -21,6 +21,7 @@ from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls
 from docx.shared import Mm, Cm, Pt
 from io import StringIO, BytesIO
+from openpyxl.styles import Font
 from pkg_resources import resource_filename
 from threading import Thread
 from .scraper import PaluchScraper, LIST_URLS
@@ -47,13 +48,6 @@ def mainGui():
     CatFrame().Show()
     app.MainLoop()
 
-
-def boldframe(s):
-
-    if 'Ochota' in s.Miejsce:
-        return ['font-weight: bold'] * len(s.index)
-    else:
-        return ['font-weight: normal'] * len(s.index)
 
 def Tooltipset(object, tooltip):
     if float(wx.__version__[0]) < 4:
@@ -247,8 +241,15 @@ class GeneralLayout(scrolled.ScrolledPanel):
 
             # save the current contents in the file
             pathname = fileDialog.GetPath()
-            with pd.ExcelWriter(pathname) as writer:
-                xlscat.style.apply(boldframe,axis=1).to_excel(writer, sheet_name='Koty', index=False)
+            with pd.ExcelWriter(pathname, engine='openpyxl') as writer:
+                xlscat.to_excel(writer, sheet_name='Koty', index=False)
+                # pogrubienie wierszy z Ochoty na Kota (bez pandas .style, które wymaga jinja2)
+                sheet = writer.sheets['Koty']
+                bold = Font(bold=True)
+                for row, miejsce in enumerate(xlscat['Miejsce'], start=2):
+                    if 'Ochota' in str(miejsce):
+                        for cell in sheet[row]:
+                            cell.font = bold
             self.openfile(pathname)
 
     def gencathist(self,catframe, ax1, ax2, sex,kotbool):
