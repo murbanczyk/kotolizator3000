@@ -1,14 +1,12 @@
 import PIL
 import docx
 import glob
-import matplotlib.pyplot as plt
 import numpy as np
 import os
 import pandas as pd
 import pathlib
 import platform
 import re
-import requests
 import shutil
 import subprocess
 import sys
@@ -17,16 +15,18 @@ import wx.adv
 import wx.lib.scrolledpanel as scrolled
 # from IPython.core.display import HTML
 from PIL import Image
-from bs4 import BeautifulSoup
-from datetime import date
+from datetime import date, datetime
 from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls
 from docx.shared import Mm, Cm, Pt
 from io import StringIO, BytesIO
+from openpyxl.styles import Font
 from pkg_resources import resource_filename
 from threading import Thread
+from .scraper import PaluchScraper, LIST_URLS
 import matplotlib
-matplotlib.use('Agg')
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 
 
 def mainGui():
@@ -49,13 +49,6 @@ def mainGui():
     app.MainLoop()
 
 
-def boldframe(s):
-
-    if 'Ochota' in s.Miejsce:
-        return ['font-weight: bold'] * len(s.index)
-    else:
-        return ['font-weight: normal'] * len(s.index)
-
 def Tooltipset(object, tooltip):
     if float(wx.__version__[0]) < 4:
         object.SetToolTipString(tooltip)
@@ -65,188 +58,291 @@ def Tooltipset(object, tooltip):
 
 class GeneralLayout(scrolled.ScrolledPanel):
     def __init__(self, parent):
-
-
-
-        self.newgen=[False, False]
-
-
         self.my_datadir = self.get_datadir() / "kotolizator" #generates path for application support to store backups
         self.today = date.today().strftime("%d-%m-%Y")
-        print(self.today)
         try:
             self.my_datadir.mkdir(parents=True)
         except FileExistsError:
             pass
         print(self.my_datadir)
-        if sys.platform == "win32":
-            slash = "\\"
-        else:
-            slash='/'
+        self.my_datadir2 = str(self.my_datadir) + os.sep
+        self.kotybool = True
+        self.busy = False
+        self.frames = {}  # pamięć wczytanych zestawień: (prefiks, dzień) -> DataFrame
+        self.dates = []
 
-        self.my_datadir2=str(self.my_datadir)+slash
-        self.nadzis='Stan na dziś'
-        # self.listbackups  = glob.glob(self.my_datadir2 + 'Mia*.kotolizer').split('Miau')[1].split('.kotolizer')[0]
-        # print(folder)
         scrolled.ScrolledPanel.__init__(self, parent)
         self.SetupScrolling(scroll_y=True, scroll_x=False)
-        self.generalboxver = wx.BoxSizer(wx.VERTICAL)  # General vertical box for UI
-        self.word1 = wx.Button(self, label='Wygeneruj zestawienie', size=(200, 50))
-        self.word1.Enabled = False
+        main = wx.BoxSizer(wx.VERTICAL)
 
-        self.box1 = wx.BoxSizer(wx.HORIZONTAL)
-        self.box2 = wx.BoxSizer(wx.HORIZONTAL)
-        self.box2a = wx.BoxSizer(wx.HORIZONTAL)
-        self.box2b = wx.BoxSizer(wx.HORIZONTAL)
-        self.box4 = wx.BoxSizer(wx.HORIZONTAL)
+        # 1. gatunek
+        self.gatunek = wx.RadioBox(self, label='1. Jakie zwierzęta?', choices=['Koty', 'Psy'],
+                                   majorDimension=2, style=wx.RA_SPECIFY_COLS)
+        Tooltipset(self.gatunek, 'Wybierz, czy analizujesz koty, czy psy')
+        self.gatunek.Bind(wx.EVT_RADIOBOX, self.switchkotpies)
+        main.Add(self.gatunek, 0, wx.ALL | wx.EXPAND, 8)
 
-        self.box3 = wx.BoxSizer(wx.HORIZONTAL)
-        self.box3a = wx.BoxSizer(wx.VERTICAL)
-        self.box5 = wx.BoxSizer(wx.HORIZONTAL)
-        self.box6 = wx.BoxSizer(wx.HORIZONTAL)
-        self.generalboxver.Add(self.box1, 0, wx.ALL | wx.EXPAND, 1)
-
-        self.generalboxver.Add(self.box2, 0, wx.ALL | wx.EXPAND, 1)
-
-        self.generalboxver.Add(self.box2a,0,wx.ALL | wx.EXPAND, 1)
-        self.generalboxver.Add(self.box2b,0,wx.ALL | wx.EXPAND, 1)
-
-        self.generalboxver.Add(self.box3,0,wx.ALL | wx.EXPAND, 1)
-        self.generalboxver.Add(self.box3a,0,wx.ALL | wx.EXPAND, 1)
-        self.generalboxver.Add(self.box4,0,wx.ALL | wx.EXPAND, 1)
-
-        self.generalboxver.Add(self.box5 ,0,wx.ALL | wx.EXPAND, 1)
-        self.generalboxver.Add(self.box6,0, wx.ALL | wx.EXPAND, 1)
-        # self.generalboxver.Add(self.box2a, 0, wx.ALL | wx.EXPAND, 1)
-        self.koty = wx.ToggleButton(self, label='Analizuj koty')
-        self.psy = wx.ToggleButton(self, label='Analizuj psy')
-        self.backup = wx.ComboBox(self, choices=[], style=wx.CB_READONLY)
-        self.backup2 = wx.ComboBox(self, choices=[], style=wx.CB_READONLY)
-        self.histogram1 = wx.Button(self, label='Wyświetl histogram', size=(200, 50))
-        self.histogram1.Enabled = False
-        self.genxls = wx.Button(self, label='Tabelka', size=(200, 50))
-        self.genxls.Enabled = False
-        self.statcat = wx.Button(self, label='Miejsca', size=(200, 50))
-        self.statcat.Enabled = False
-        # Definition of buttons
-        self.kotybool = False
-        self.histnew = wx.Button(self, label='Histogram nowych zwierząt', size=(200, 50))
-        self.histold = wx.Button(self, label='Histogram znikniętych zwierząt', size=(200, 50))
-
-        self.wordNew = wx.Button(self, label='Wygeneruj zestawienie nowych zwierząt', size=(200, 50))
-        self.wordOld = wx.Button(self, label='Wygeneruj zestawienie znikniętych zwierząt', size=(200, 50))
-
-        self.switchkotpies(True)
-
-        # self.listbackups = ['Stan na di']
-        # self.listbackups.insert(0,'Stan na dziś')
-        # self.zwierzeta = ['Analizuj koty', 'Analizuj psy', 'Analizuj wszystkie']
-        # self.zwierzetacombo = wx.ComboBox(self, choices=self.zwierzeta, style=wx.CB_READONLY)
-        # Tooltipset(self.zwierzetacombo, 'Wybierz gatunek do analizy')
-        # self.zwierzetacombo.Value = self.zwierzeta[0]
-        self.box1.Add(self.koty, wx.ALL | wx.EXPAND, 1)
-        self.box1.Add(self.psy, wx.ALL | wx.EXPAND, 1)
-
-        Tooltipset(self.backup, 'Na jaki dzień wyświetlić dane?')
-        # self.backup.Value = self.listbackups[0]
-        self.koty.SetValue(True)
-        self.psy.SetValue(False)
-        self.koty.Bind(wx.EVT_TOGGLEBUTTON, self.switchkotpies)
-        self.psy.Bind(wx.EVT_TOGGLEBUTTON, self.switchkotpies)
-
-        self.nowedane = wx.Button(self, label='Ściągnij nowe dane', size=(200, 50))
-
+        # 2. dane
+        box = wx.StaticBoxSizer(wx.VERTICAL, self, '2. Dane')
+        sb = box.GetStaticBox()
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        self.nowedane = wx.Button(sb, label='Pobierz aktualne dane ze strony')
+        Tooltipset(self.nowedane, 'Pobiera aktualną listę zwierząt ze strony schroniska i zapisuje ją pod dzisiejszą datą')
         self.nowedane.Bind(wx.EVT_BUTTON, self.parsepaluch)
+        row.Add(self.nowedane, 0, wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, 12)
+        row.Add(wx.StaticText(sb, label='Dane z dnia:'), 0, wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, 6)
+        self.backup = wx.Choice(sb, size=(140, -1))
+        Tooltipset(self.backup, 'Z którego dnia pokazać zestawienia? Każde pobranie danych zapisuje nowy dzień.')
+        self.backup.Bind(wx.EVT_CHOICE, self.combochange)
+        row.Add(self.backup, 0, wx.ALIGN_CENTER_VERTICAL)
+        box.Add(row, 0, wx.ALL, 6)
+        self.daneinfo = wx.StaticText(sb, label='')
+        box.Add(self.daneinfo, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+        main.Add(box, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+
+        # 3. zestawienia dla wybranego dnia
+        box = wx.StaticBoxSizer(wx.VERTICAL, self, '3. Zestawienia dla wybranego dnia')
+        sb = box.GetStaticBox()
+        grid = wx.GridSizer(2, 2, 6, 6)
+        self.word1 = wx.Button(sb, label='Lista zwierząt (Word)')
+        Tooltipset(self.word1, 'Dokument Word ze zdjęciem, wiekiem, datą przyjęcia i opisem każdego zwierzęcia.\n'
+                               'Pilne adopcje są podświetlone na czerwono, Ochota na Kota na fioletowo.')
+        self.genxls = wx.Button(sb, label='Tabelka (Excel)')
+        Tooltipset(self.genxls, 'Krótka tabelka: numer, imię, wiek i miejsce pobytu')
+        self.histogram1 = wx.Button(sb, label='Histogram wieku')
+        Tooltipset(self.histogram1, 'Wykresy wieku zwierząt: wszystkich, samic i samców')
+        self.statcat = wx.Button(sb, label='Ile zwierząt w którym miejscu')
+        Tooltipset(self.statcat, 'Liczba zwierząt w poszczególnych miejscach (np. Ochota na Kota)')
+        for b in (self.word1, self.genxls, self.histogram1, self.statcat):
+            grid.Add(b, 0, wx.EXPAND)
+        box.Add(grid, 0, wx.ALL | wx.EXPAND, 6)
+        main.Add(box, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+
+        # 4. porównanie
+        box = wx.StaticBoxSizer(wx.VERTICAL, self, '4. Porównanie z innym dniem')
+        sb = box.GetStaticBox()
+        row = wx.BoxSizer(wx.HORIZONTAL)
+        row.Add(wx.StaticText(sb, label='Porównaj z dniem:'), 0, wx.RIGHT | wx.ALIGN_CENTER_VERTICAL, 6)
+        self.backup2 = wx.Choice(sb, size=(140, -1))
+        Tooltipset(self.backup2, 'Z którym dniem porównać wybrany dzień?')
+        self.backup2.Bind(wx.EVT_CHOICE, self.combochange2)
+        row.Add(self.backup2, 0, wx.ALIGN_CENTER_VERTICAL)
+        box.Add(row, 0, wx.ALL, 6)
+        grid = wx.FlexGridSizer(2, 3, 6, 6)
+        grid.AddGrowableCol(0)
+        self.txtnowe = wx.StaticText(sb, label='Nowe zwierzęta:')
+        self.txtznikniete = wx.StaticText(sb, label='Zniknięte zwierzęta:')
+        self.wordNew = wx.Button(sb, label='Lista (Word)')
+        Tooltipset(self.wordNew, 'Zwierzęta, które są w wybranym dniu, a nie było ich w dniu porównania')
+        self.histnew = wx.Button(sb, label='Histogram')
+        Tooltipset(self.histnew, 'Wiek zwierząt, które przybyły')
+        self.wordOld = wx.Button(sb, label='Lista (Word)')
+        Tooltipset(self.wordOld, 'Zwierzęta, które były w dniu porównania, a nie ma ich w wybranym dniu (np. adoptowane)')
+        self.histold = wx.Button(sb, label='Histogram')
+        Tooltipset(self.histold, 'Wiek zwierząt, które zniknęły z listy')
+        for w in (self.txtnowe, self.wordNew, self.histnew, self.txtznikniete, self.wordOld, self.histold):
+            grid.Add(w, 0, wx.ALIGN_CENTER_VERTICAL | (wx.EXPAND if isinstance(w, wx.Button) else 0))
+        box.Add(grid, 0, wx.ALL | wx.EXPAND, 6)
+        self.porinfo = wx.StaticText(sb, label='')
+        box.Add(self.porinfo, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+        main.Add(box, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 8)
+
+        # postęp i komunikaty
+        self.postep = wx.Gauge(self, range=100, size=(-1, 18), name='Postęp')
+        Tooltipset(self.postep, 'Postęp pobierania danych lub tworzenia zestawienia')
+        main.Add(self.postep, 0, wx.LEFT | wx.RIGHT | wx.EXPAND, 8)
+        self.statustxt = wx.StaticText(self, label='')
+        main.Add(self.statustxt, 0, wx.ALL | wx.EXPAND, 8)
+
         self.word1.Bind(wx.EVT_BUTTON, self.genword)
-
-
-        self.box2.Add(self.nowedane)
-        self.box2.Add(self.backup, wx.ALL | wx.EXPAND, 1)
-
-        self.box2a.Add(self.word1, wx.ALL | wx.EXPAND, 1)
-        self.box2a.Add(self.histogram1, wx.ALL | wx.EXPAND, 1)
-        self.box2b.Add(self.genxls, wx.ALL | wx.EXPAND, 1)
-        self.box2b.Add(self.statcat, wx.ALL | wx.EXPAND, 1)
-
-        self.postep = wx.Gauge(self, range=100, size=(600, 50), name='Postęp')
-        Tooltipset(self.postep, 'Pasek postępu ściągania nowych danych, lub generacji zestawienia')
-        self.box3.Add(self.postep, wx.ALL | wx.EXPAND, 1)
-        # self.generalboxver.Add(wx.StaticLine(self, style=wx.LI_HORIZONTAL))
-
-        # self.generalboxver.Add(wx.StaticText(self, label='Porównania historyczne: \n'))
-
-        # self.generalboxver.Add(wx.StaticLine(self, style=wx.LI_HORIZONTAL))
-        # self.dialog = wx.ProgressDialog('Doing Stuff', 'Please wait...')
-
-        Tooltipset(self.backup2, 'Na jaki dzień wyświetlić dane?')
-        self.backup2.Value = self.listbackups[0]
-        # self.generalboxver.Add(wx.StaticLine(self, style=wx.LI_HORIZONTAL))
-
-        self.txtpor = wx.StaticText(self, label='Porównaj z:')
-        self.txtpor2 = wx.StaticText(self, label='*********************************************************Kącik historyczny:*********************************************************')
-
-        self.box4.Add(self.txtpor)
-        self.box3a.Add(wx.StaticText(self, label=' '))
-
-        self.box3a.Add(self.txtpor2)
-        self.box3a.Add(wx.StaticText(self, label=' '))
-
-        self.box4.Add(self.backup2, wx.ALL | wx.EXPAND, 1)
-
-        self.box5.Add(self.wordNew, wx.ALL | wx.EXPAND, 1)
-        self.box6.Add(self.wordOld, wx.ALL | wx.EXPAND, 1)
-        self.backup.Bind(wx.EVT_COMBOBOX, self.combochange)
+        self.genxls.Bind(wx.EVT_BUTTON, self.excellgen)
+        self.histogram1.Bind(wx.EVT_BUTTON, self.plothist)
+        self.statcat.Bind(wx.EVT_BUTTON, self.getcatstat)
         self.wordNew.Bind(wx.EVT_BUTTON, self.genwordNew)
         self.wordOld.Bind(wx.EVT_BUTTON, self.genwordOld)
-        self.box5.Add(self.histnew, wx.ALL | wx.EXPAND, 1)
-        self.box6.Add(self.histold, wx.ALL | wx.EXPAND, 1)
-
-        self.histogram1.Bind(wx.EVT_BUTTON, self.plothist)
-        self.genxls.Bind(wx.EVT_BUTTON, self.excellgen)
-        self.statcat.Bind(wx.EVT_BUTTON, self.getcatstat)
         self.histnew.Bind(wx.EVT_BUTTON, self.plothistnew)
         self.histold.Bind(wx.EVT_BUTTON, self.plothistold)
-        self.lab = True
-        self.SetSizerAndFit(self.generalboxver)
+
+        self.SetSizerAndFit(main)
+        self.refresh_dates()
+
+    # --- stan interfejsu ---
+
+    def prefix(self):
+        return 'Miau' if self.kotybool else 'Hau'
+
+    def zwierzeta(self):
+        return 'kotów' if self.kotybool else 'psów'
+
+    def status(self, msg):
+        """Komunikat pod paskiem postępu; można wołać z dowolnego wątku."""
+        wx.CallAfter(self.statustxt.SetLabel, msg)
+
+    def find_dates(self):
+        dates = []
+        for k in glob.glob(self.my_datadir2 + self.prefix() + '*.kotolizer'):
+            day = os.path.basename(k)[len(self.prefix()):-len('.kotolizer')]
+            try:
+                dates.append((datetime.strptime(day, '%d-%m-%Y'), day))
+            except ValueError:
+                pass
+        return [d for _, d in sorted(dates, reverse=True)]  # najnowsze na górze
+
+    def refresh_dates(self, select=None):
+        """Odświeża listy dni; domyślnie wybiera najnowszy dzień i dzień przed nim do porównania."""
+        self.dates = self.find_dates()
+        self.backup.SetItems(self.dates)
+        if self.dates:
+            self.backup.SetSelection(self.dates.index(select) if select in self.dates else 0)
+        if self.dates and self.dates[0] == self.today:
+            self.nowedane.SetLabel('Pobierz dane ponownie')
+        else:
+            self.nowedane.SetLabel('Pobierz aktualne dane ze strony')
+        self.combochange(None)
+
+    def combochange(self, event):
+        day = self.backup.GetStringSelection()
+        others = [d for d in self.dates if d != day]
+        self.backup2.SetItems(others)
+        if others:
+            older = [d for d in others if self.dates.index(d) > self.dates.index(day)]
+            self.backup2.SetStringSelection(older[0] if older else others[0])
+        if not day:
+            self.daneinfo.SetLabel('Brak zapisanych danych. Kliknij „Pobierz aktualne dane ze strony”.')
+        else:
+            try:
+                n = len(self.getframecur(self.backup))
+                info = 'W dniu %s na liście było %d %s.' % (day, n, self.zwierzeta())
+            except Exception as e:
+                info = 'Nie udało się wczytać danych z dnia %s: %s' % (day, e)
+            if day != self.today:
+                info += '\nTo nie są dzisiejsze dane – aby je mieć, kliknij „Pobierz aktualne dane ze strony”.'
+            self.daneinfo.SetLabel(info)
+        self.combochange2(None)
+
+    def combochange2(self, event):
+        self.txtnowe.SetLabel('Nowe zwierzęta:')
+        self.txtznikniete.SetLabel('Zniknięte zwierzęta:')
+        self.counts = None
+        if not self.backup2.GetStringSelection():
+            self.porinfo.SetLabel('Do porównania potrzebne są dane z co najmniej dwóch dni.')
+        else:
+            try:
+                catframe = self.getframecur(self.backup)
+                catframe2 = self.getframecur(self.backup2)
+                self.counts = (len(self.comparedf(catframe, catframe2)), len(self.comparedf(catframe2, catframe)))
+                self.txtnowe.SetLabel('Nowe zwierzęta: %d' % self.counts[0])
+                self.txtznikniete.SetLabel('Zniknięte zwierzęta: %d' % self.counts[1])
+                self.porinfo.SetLabel('Porównanie dnia %s z dniem %s.' % (self.backup.GetStringSelection(),
+                                                                          self.backup2.GetStringSelection()))
+            except Exception as e:
+                self.porinfo.SetLabel('Nie udało się porównać: %s' % e)
+        self.update_buttons()
+        self.Layout()
+        self.GetParent().Layout()
+
+    def update_buttons(self):
+        idle = not self.busy
+        have = idle and bool(self.backup.GetStringSelection())
+        for b in (self.word1, self.genxls, self.histogram1, self.statcat):
+            b.Enable(have)
+        compare = have and self.counts is not None
+        self.wordNew.Enable(compare and self.counts[0] > 0)
+        self.histnew.Enable(compare and self.counts[0] > 0)
+        self.wordOld.Enable(compare and self.counts[1] > 0)
+        self.histold.Enable(compare and self.counts[1] > 0)
+        for w in (self.nowedane, self.gatunek, self.backup, self.backup2):
+            w.Enable(idle)
+
+    def run_task(self, target, args=(), done=None):
+        """Uruchamia długą operację w tle, blokując w tym czasie przyciski."""
+        self.busy = True
+        self.update_buttons()
+        self.postep.SetValue(0)
+
+        def worker():
+            try:
+                result = target(*args)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                wx.CallAfter(self.task_finished, None, e)
+            else:
+                wx.CallAfter(self.task_finished, done(result) if done else None, None)
+
+        t = Thread(target=worker)
+        t.daemon = True
+        t.start()
+
+    def task_finished(self, msg, error):
+        self.busy = False
+        self.update_buttons()
+        if error is not None:
+            self.statustxt.SetLabel('Wystąpił błąd.')
+            wx.MessageDialog(self, str(error), 'Błąd', wx.OK | wx.ICON_ERROR).ShowModal()
+        elif msg:
+            self.statustxt.SetLabel(msg)
+
+    def ask_path(self, title, wildcard, default):
+        with wx.FileDialog(self, title, wildcard=wildcard, defaultFile=default,
+                           style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as fileDialog:
+            if fileDialog.ShowModal() == wx.ID_CANCEL:
+                return None
+            return fileDialog.GetPath()
+
+    def filename(self, kind, ext, with_compare=False):
+        name = kind + '_' + ('koty' if self.kotybool else 'psy') + '_' + self.backup.GetStringSelection()
+        if with_compare:
+            name += '_vs_' + self.backup2.GetStringSelection()
+        return name + '.' + ext
+
+    # --- zestawienia ---
 
     def getcatstat(self,event):
         xlscat=self.gencatxls()
-
-        dlg = wx.MessageDialog(self,  xlscat.groupby(['Miejsce']).size().to_string(),'Statystyki',).ShowModal()
+        wx.MessageDialog(self, xlscat.groupby(['Miejsce']).size().to_string(),
+                         'Ile %s w którym miejscu (%s)' % (self.zwierzeta(), self.backup.GetStringSelection()),
+                         ).ShowModal()
     def gencatxls(self):
 
         catframe = self.getframecur(self.backup)
-        xlscat = pd.DataFrame(columns=['Nr', 'ID', 'Imię', 'Wiek', 'Miejsce'])
+        rows = []
         opo=0
         for a, b in catframe.iterrows():
             opo+=1
-            Imie = b[2].split('\n')[0]
-            Miejsce = b[4].split('\n')[-1]
+            Imie = str(b['Imię']).split('\n')[0]
+            Miejsce = str(b['Przyjęcie']).split('\n')[-1]
             miejscatocheck = ['Azyl', 'Ochota', 'właściciela']
             if not any(ext in Miejsce for ext in miejscatocheck):
                 Miejsce = 'brak informacji'
-            if 'mies' in b[3]:
-                mies=int(b[3].split()[0])
-                if mies<4:
+            Wiek = str(b['Wiek'])
+            if 'mies' in Wiek:
+                try:
+                    mies=int(Wiek.split()[0])
+                except ValueError:
+                    mies = None
+                if mies is not None and mies<4:
                     Imie +='(m)'
-            new_row = {'Nr':opo, 'ID': b[1], 'Imię': Imie, 'Wiek': b[3], 'Miejsce': Miejsce}
-            xlscat = xlscat.append(new_row, ignore_index=True)
-        return xlscat
+            rows.append({'Nr':opo, 'ID': b['ID'], 'Imię': Imie, 'Wiek': Wiek, 'Miejsce': Miejsce})
+        return pd.DataFrame(rows, columns=['Nr', 'ID', 'Imię', 'Wiek', 'Miejsce'])
     def excellgen(self,event):
         xlscat=self.gencatxls()
         # xlscat.style.applymap('font-weight: bold',
         #                        subset=pd.IndexSlice[xlscat.index[xlscat.Miejsce == 'Ochota na Kota'], :])
         # print(xlscat.style.applymap('font-weight: bold',
         #                        subset=pd.IndexSlice[xlscat.index[xlscat.Miejsce == 'Ochota na Kota'], :]))
-        with wx.FileDialog(self, "Zapisz tabelkę", wildcard="`XLSX files (*.xlsx)|*.xlsx",
-                           style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as fileDialog:
-            if fileDialog.ShowModal() == wx.ID_CANCEL:
-                return  # the user changed their mind
-
-            # save the current contents in the file
-            pathname = fileDialog.GetPath()
-            with pd.ExcelWriter(pathname) as writer:
-                xlscat.style.apply(boldframe,axis=1).to_excel(writer, sheet_name='Koty', index=False)
+        pathname = self.ask_path('Zapisz tabelkę', 'Excel (*.xlsx)|*.xlsx', self.filename('tabelka', 'xlsx'))
+        if pathname:
+            with pd.ExcelWriter(pathname, engine='openpyxl') as writer:
+                xlscat.to_excel(writer, sheet_name='Koty', index=False)
+                # pogrubienie wierszy z Ochoty na Kota (bez pandas .style, które wymaga jinja2)
+                sheet = writer.sheets['Koty']
+                bold = Font(bold=True)
+                for row, miejsce in enumerate(xlscat['Miejsce'], start=2):
+                    if 'Ochota' in str(miejsce):
+                        for cell in sheet[row]:
+                            cell.font = bold
+            self.statustxt.SetLabel('Zapisano: ' + os.path.basename(pathname))
             self.openfile(pathname)
 
     def gencathist(self,catframe, ax1, ax2, sex,kotbool):
@@ -277,24 +373,24 @@ class GeneralLayout(scrolled.ScrolledPanel):
 
         if sex == 'all':
             lataR = np.floor(np.array(lata) / 12)
-            oldest = int(np.max(lataR))
+            oldest = int(np.max(lataR)) if len(lataR) else 0
             bins2 = np.arange(0, oldest + 2) - 0.5
 
             a1, _, patches = ax1.hist(np.array(lata), bins, linewidth=1, edgecolor='w', color='k')
             a2, _, patches2 = ax2.hist(lataR, bins2, linewidth=1, edgecolor='w', color='k')
             if kotbool:
                 ax1.set_title('Koty do 1 roku, suma: ' + str(round(sum(a1))))
-                ax2.set_title('Koty wszystkie, suma: ' + str(round(sum(a2))) + ';starsze of 8lat: ' + str(
+                ax2.set_title('Koty wszystkie, suma: ' + str(round(sum(a2))) + '\nstarsze od 8 lat: ' + str(
                     len(np.where(lataR >= 8)[0])))
             else:
                 ax1.set_title('Psy do 1 roku, suma: ' + str(round(sum(a1))))
-                ax2.set_title('Psy wszystkie, suma: ' + str(round(sum(a2))) + ';starsze of 8lat: ' + str(
+                ax2.set_title('Psy wszystkie, suma: ' + str(round(sum(a2))) + '\nstarsze od 8 lat: ' + str(
                     len(np.where(lataR >= 8)[0])))
 
         elif sex == 'f':
             lataR = np.floor(np.array(lataF) / 12)
 
-            oldest = int(np.max(lataR))
+            oldest = int(np.max(lataR)) if len(lataR) else 0
             bins2 = np.arange(0, oldest + 2) - 0.5
 
             a1, _, patches = ax1.hist(np.array(lataF), bins, linewidth=1, edgecolor='w', color='pink')
@@ -303,18 +399,18 @@ class GeneralLayout(scrolled.ScrolledPanel):
             if kotbool:
 
                 ax1.set_title('Kotki do 1 roku, suma: ' + str(round(sum(a1))))
-                ax2.set_title('Kotki wszystkie, suma: ' + str(round(sum(a2))) + ';starsze of 8lat: ' + str(
+                ax2.set_title('Kotki wszystkie, suma: ' + str(round(sum(a2))) + '\nstarsze od 8 lat: ' + str(
                     len(np.where(lataR >= 8)[0])))
             else:
                 ax1.set_title('Suczki do 1 roku, suma: ' + str(round(sum(a1))))
-                ax2.set_title('Suczki wszystkie, suma: ' + str(round(sum(a2))) + ';starsze of 8lat: ' + str(
+                ax2.set_title('Suczki wszystkie, suma: ' + str(round(sum(a2))) + '\nstarsze od 8 lat: ' + str(
                     len(np.where(lataR >= 8)[0])))
 
 
         else:
             lataR = np.floor(np.array(lataM) / 12)
 
-            oldest = int(np.max(lataR))
+            oldest = int(np.max(lataR)) if len(lataR) else 0
             bins2 = np.arange(0, oldest + 2) - 0.5
 
             a1, _, patches = ax1.hist(np.array(lataM), bins, linewidth=1, edgecolor='w', color='b')
@@ -326,11 +422,11 @@ class GeneralLayout(scrolled.ScrolledPanel):
             if kotbool:
 
                 ax1.set_title('Kocury do 1 roku, suma: ' + str(round(sum(a1))))
-                ax2.set_title('Kocury wszystkie, suma: ' + str(round(sum(a2))) + ';starsze of 8lat: ' + str(
+                ax2.set_title('Kocury wszystkie, suma: ' + str(round(sum(a2))) + '\nstarsze od 8 lat: ' + str(
                     len(np.where(lataR >= 8)[0])))
             else:
                 ax1.set_title('Psy (samce) do 1 roku, suma: ' + str(round(sum(a1))))
-                ax2.set_title('Psy (samce) wszystkie, suma: ' + str(round(sum(a2))) + ';starsze of 8lat: ' + str(
+                ax2.set_title('Psy (samce) wszystkie, suma: ' + str(round(sum(a2))) + '\nstarsze od 8 lat: ' + str(
                     len(np.where(lataR >= 8)[0])))
 
         ax1.set_xticks(range(0, 12))
@@ -342,7 +438,7 @@ class GeneralLayout(scrolled.ScrolledPanel):
             y = pp._height  + 0.3
             ymax.append(y)
             ax1.text(x, y, int(pp._height), ha='center')
-        ax1.set_ylim([0,max(ymax)+0.5])
+        ax1.set_ylim([0, max(ymax) * 1.15 + 0.5])
 
         #     ax1.set_title('Koty do 1 roku, suma: '  + str(round(sum(a1))))
         ax1.set_xlabel('miesiące')
@@ -373,101 +469,50 @@ class GeneralLayout(scrolled.ScrolledPanel):
             # x = (pp._x0 + pp._x1) / 2
             # y = pp._y1 + 0.3
             # ax2.text(x, y, int(pp._y1), ha='center')
-        ax2.set_ylim([0,max(ymax)+0.5])
+        ax2.set_ylim([0, max(ymax) * 1.15 + 0.5])
 
         return lata
 
     def plothist(self,event):
-        with wx.FileDialog(self, "Save histogram", wildcard="PNG files (*.png)|*.png",
-                           style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as fileDialog:
-            if fileDialog.ShowModal() == wx.ID_CANCEL:
-                return  # the user changed their mind
+        self.showhist(self.getframecur(self.backup),
+                      'Wiek %s – %s' % (self.zwierzeta(), self.backup.GetStringSelection()),
+                      self.filename('histogram', 'png'))
 
-            # save the current contents in the file
-            pathname = fileDialog.GetPath()
-            catframe=self.getframecur(self.backup)
-
-            first2 = Thread(target=self.plothistp, args=(pathname,catframe))
-            first2.setDaemon(True)
-            first2.start()
-            print(pathname)
     def plothistold(self,event):
-        catframe = self.getframecur(self.backup)
-        catframe2 = self.getframecur(self.backup2)
-        # Nowekoty = comparedf(catframe, zeszly_tydzien)
-        Zniknietekoty = self.comparedf(catframe2, catframe)
-        if Zniknietekoty.shape[0] == 0:
-            dlg = wx.MessageDialog(self, 'Nie ubyło zwierzaków', 'Stan zwierząt nie zmniejszył się').ShowModal()
-        else:
-            with wx.FileDialog(self, "Save histogram", wildcard="PNG files (*.png)|*.png",
-                               style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as fileDialog:
-                if fileDialog.ShowModal() == wx.ID_CANCEL:
-                    return  # the user changed their mind
+        Zniknietekoty = self.comparedf(self.getframecur(self.backup2), self.getframecur(self.backup))
+        self.showhist(Zniknietekoty,
+                      'Wiek znikniętych %s – %s w porównaniu z %s' % (
+                          self.zwierzeta(), self.backup.GetStringSelection(), self.backup2.GetStringSelection()),
+                      self.filename('histogram_znikniete', 'png', True))
 
-                # save the current contents in the file
-                pathname = fileDialog.GetPath()
-
-                first2 = Thread(target=self.plothistp, args=(pathname,Zniknietekoty))
-                first2.setDaemon(True)
-                first2.start()
-                print(pathname)
     def plothistnew(self,event):
-        catframe = self.getframecur(self.backup)
-        catframe2 = self.getframecur(self.backup2)
-        # Nowekoty = comparedf(catframe, zeszly_tydzien)
-        Nowekoty = self.comparedf(catframe, catframe2)
-        if Nowekoty.shape[0]==0:
-            dlg = wx.MessageDialog(self, 'Nie przybyło zwierzaków', 'Nie ma nowych zwierząt w porówaniu').ShowModal()
-        else:
-            with wx.FileDialog(self, "Save histogram", wildcard="PNG files (*.png)|*.png",
-                               style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as fileDialog:
-                if fileDialog.ShowModal() == wx.ID_CANCEL:
-                    return  # the user changed their mind
+        Nowekoty = self.comparedf(self.getframecur(self.backup), self.getframecur(self.backup2))
+        self.showhist(Nowekoty,
+                      'Wiek nowych %s – %s w porównaniu z %s' % (
+                          self.zwierzeta(), self.backup.GetStringSelection(), self.backup2.GetStringSelection()),
+                      self.filename('histogram_nowe', 'png', True))
 
-                # save the current contents in the file
-                pathname = fileDialog.GetPath()
+    def showhist(self, catframe, title, defaultfile):
+        try:
+            fig = self.histfigure(catframe)
+        except Exception as e:
+            wx.MessageDialog(self, str(e), 'Błąd', wx.OK | wx.ICON_ERROR).ShowModal()
+            return
+        HistFrame(self, fig, title, defaultfile).Show()
+        self.statustxt.SetLabel('Otwarto histogram: ' + title)
 
-                first2 = Thread(target=self.plothistp, args=(pathname, Nowekoty))
-                first2.setDaemon(True)
-                first2.start()
-                print(pathname)
+    def histfigure(self, catframe):
+        """Rysuje histogramy wieku (wszystkie, samice, samce) i zwraca gotową figurę."""
+        sizes = {'font.size': 9, 'axes.titlesize': 11, 'axes.labelsize': 10,
+                 'xtick.labelsize': 9, 'ytick.labelsize': 9, 'legend.fontsize': 9}
+        with matplotlib.rc_context(sizes):
+            fig = Figure(figsize=(13, 11), constrained_layout=True)
+            axes = fig.subplots(3, 2)
+            self.gencathist(catframe, axes[0][0], axes[0][1], 'all', self.kotybool)
+            self.gencathist(catframe, axes[1][0], axes[1][1], 'f', self.kotybool)
+            self.gencathist(catframe, axes[2][0], axes[2][1], 'm', self.kotybool)
+        return fig
 
-
-    def plothistp(self,pathname,catframe):
-        # print(catframe.shape)
-        fig = plt.figure(figsize=(29, 25))
-        SMALL_SIZE = 14
-        MEDIUM_SIZE = 25
-        BIGGER_SIZE = 32
-        ax1 = fig.add_subplot(321)
-        ax2 = fig.add_subplot(322)
-        ax3 = fig.add_subplot(323)
-        ax4 = fig.add_subplot(324)
-        ax5 = fig.add_subplot(325)
-        ax6 = fig.add_subplot(326)
-        wx.CallAfter(self.postep.SetRange, 3)
-
-        plt.rc('font', size=SMALL_SIZE)  # controls default text sizes
-        plt.rc('axes', titlesize=BIGGER_SIZE)  # fontsize of the axes title
-        plt.rc('axes', labelsize=MEDIUM_SIZE)  # fontsize of the x and y labels
-        plt.rc('xtick', labelsize=SMALL_SIZE)  # fontsize of the tick labels
-        plt.rc('ytick', labelsize=SMALL_SIZE)  # fontsize of the tick labels
-        plt.rc('legend', fontsize=SMALL_SIZE)  # legend fontsize
-        plt.rc('figure', titlesize=BIGGER_SIZE)  # fontsize of the figure title
-        lata = self.gencathist(catframe, ax1, ax2, 'all',self.kotybool)
-        wx.CallAfter(self.postep.SetValue, 1)
-
-        lata = self.gencathist(catframe, ax3, ax4, 'f', self.kotybool)
-        wx.CallAfter(self.postep.SetValue, 2)
-
-        lata = self.gencathist(catframe, ax5, ax6, 'm',self.kotybool)
-        wx.CallAfter(self.postep.SetValue, 3)
-
-
-        fig.savefig(pathname)
-        # fig.show()
-
-        self.openfile(pathname)
     def openfile(self, file):
         if platform.system() == 'Darwin':  # macOS
             subprocess.call(('open',file))
@@ -477,221 +522,69 @@ class GeneralLayout(scrolled.ScrolledPanel):
             subprocess.call(('xdg-open',file))
 
 
-    def combochange(self,event):
-        if self.backup.Value!=self.nadzis:
-            self.word1.Enabled=True
-            self.histogram1.Enabled=True
-            self.genxls.Enabled=True
-            self.statcat.Enabled=True
-            self.histnew.Enabled = True
-            self.histold.Enabled = True
-            self.wordNew.Enabled = True
-            self.wordOld.Enabled = True
-        elif self.newgen[0] and self.kotybool:
-            self.word1.Enabled = True
-            self.histogram1.Enabled = True
-            self.genxls.Enabled = True
-            self.statcat.Enabled = True
-            self.histnew.Enabled = True
-            self.histold.Enabled = True
-            self.wordNew.Enabled = True
-            self.wordOld.Enabled = True
-        elif self.newgen[1] and not self.kotybool:
-            self.word1.Enabled=True
-            self.histogram1.Enabled=True
-            self.genxls.Enabled=True
-            self.statcat.Enabled=True
-            self.histnew.Enabled = True
-            self.histold.Enabled = True
-            self.wordNew.Enabled = True
-            self.wordOld.Enabled = True
-        else:
-            self.word1.Enabled=False
-            self.histogram1.Enabled=False
-            self.genxls.Enabled=False
-            self.statcat.Enabled=False
-            self.histnew.Enabled=False
-            self.histold.Enabled=False
-            self.wordNew.Enabled=False
-            self.wordOld.Enabled=False
-
-
-
     def switchkotpies(self, event):
-        self.listbackups = [ self.nadzis]
+        self.kotybool = self.gatunek.GetSelection() == 0
+        self.statustxt.SetLabel('')
+        self.postep.SetValue(0)
+        self.refresh_dates()
 
-        self.backup.Clear()
-        self.backup2.Clear()
-        # self.backup2.Append( self.nadzis)
-        self.backup.Append( self.nadzis)
-        self.backup.SetValue( self.nadzis)
-        if self.kotybool:
-            self.koty.SetValue(False)
-            self.psy.SetValue(True)
-            self.kotybool = False
-
-            lista = glob.glob(self.my_datadir2 + 'Hau*.kotolizer')
-            for k in lista:
-                self.listbackups.append(k.split('Hau')[1].split('.kotolizer')[0])
-                self.backup.Append(k.split('Hau')[1].split('.kotolizer')[0])
-                self.backup2.Append(k.split('Hau')[1].split('.kotolizer')[0])
-
-
-        else:
-            self.psy.SetValue(False)
-            self.koty.SetValue(True)
-            self.kotybool = True
-            lista = glob.glob(self.my_datadir2 + 'Miau*.kotolizer')
-            for k in lista:
-                self.listbackups.append(k.split('Miau')[1].split('.kotolizer')[0])
-                self.backup.Append(k.split('Miau')[1].split('.kotolizer')[0])
-                self.backup2.Append(k.split('Miau')[1].split('.kotolizer')[0])
-
-        self.backup2.SetValue(self.listbackups[-1])
-        self.combochange(True)
+    # --- pobieranie danych ---
 
     def parsepaluch(self, event):
+        self.status('Pobieranie listy %s…' % self.zwierzeta())
+        self.run_task(self.parsepaluch2, (), self.parse_done)
 
-        first2 = Thread(target=self.parsepaluch2)
-        first2.setDaemon(True)
-        first2.start()
-        self.nowedane.Enabled = False
+    def parse_done(self, result):
+        n, fetched = result
+        wx.CallAfter(self.refresh_dates, self.today)
+        return 'Pobrano dane: %d %s (nowych lub odświeżonych stron zwierząt: %d).' % (n, self.zwierzeta(), fetched)
 
     def parsepaluch2(self):
-        self.psy.Enabled=False
-        self.koty.Enabled=False
-        linkMain = 'https://napaluchu.waw.pl/zwierzeta/zwierzeta-do-adopcji/?pet_page='
-        if self.kotybool:
-
-            linkEnd = '&pet_species=2'  # Koty
-        else:
-            linkEnd = '&pet_species=1'  # PSY
-        wx.CallAfter(self.postep.SetValue, 10)
-
-        links = self.get_all_cat_links(linkMain, linkEnd)
-
-        linkMain = 'https://napaluchu.waw.pl/zwierzeta/ostatnio-znalezione/?pet_page='
-        links = np.concatenate((links, self.get_all_cat_links(linkMain, linkEnd)))
-        wx.CallAfter(self.postep.SetRange, len(links) + 1)
-        wx.CallAfter(self.postep.SetValue, 1)
-        self.catframe = pd.DataFrame(columns=['Nr', 'ID', 'Imię', 'Wiek', 'Przyjęcie', 'Foto', 'Ogłoszenie'])
-        opo = 1
-        for countlinks, k in enumerate(links):
-            CatID, CatName, CatAge, CatIn, CatDesc, CatStat, CatImage = self.get_cat_details(k)
-            if CatID != 0:
-                new_row = {'Nr': opo, 'ID': CatID, 'Imię': CatName, 'Wiek': CatAge, 'Przyjęcie': CatIn,
-                           'Foto': CatImage, 'Ogłoszenie': CatDesc}
-                self.catframe = self.catframe.append(new_row, ignore_index=True)
-                wx.CallAfter(self.postep.SetValue, countlinks)
-                opo += 1
-        if self.kotybool:
-            self.catframe.to_pickle(self.my_datadir2 + 'Miau' +self.today +'.kotolizer', compression='bz2')
-            self.newgen[0]=True
-        else:
-            self.catframe.to_pickle(self.my_datadir2 + 'Hau' +self.today +'.kotolizer', compression='bz2')
-            self.newgen[1]=True
-
-        wx.CallAfter(self.postep.SetValue, len(links) + 1)
-
-        self.word1.Enabled = True
-        self.histogram1.Enabled = True
-        self.genxls.Enabled = True
-        self.statcat.Enabled = True
-        self.histnew.Enabled=True
-        self.histold.Enabled=True
-        self.wordOld.Enabled=True
-        self.wordNew.Enabled=True
-
-        # self.nowedane.Enabled=True
-
-        # links2=get_all_cat_links(linkMain,linkEnd)
-
-    def get_cat_details(self, link):
-        # ll=links[1]
-
-        soup = self.getsoup('https://napaluchu.waw.pl/' + link)
-        CatStat = str(soup.body.find_all('strong')[5])
-        #     CatStat+='\n\n'
-        #     CatStat+=str(soup.body.find_all('strong')[8])
-        CatID = int(str(soup.body.find_all('h2')[0]).split(' ')[-1].split('>')[1].split('/')[0])
-        CatName = str(soup.body.find_all('h2')[0]).split(' ')[0].split('>')[1] + '\n' + \
-                  str(soup.body.find_all('strong')[2]).split('>')[1].split('<')[0]
-        CatAge = str(str(soup.body.find_all('strong')[1]).split('>')[1].split('</')[0])
-        # soup.body.find('div', {'class':"autocontainer"})
-        CatIn = (str(soup.body.find_all('strong')[6]).split('>')[1].split('<')[0]) + '\n' + \
-                str(soup.body.find_all('strong')[7]).split('>')[1].split('<')[0]
-        CatIn += '\n\nZdjęć:' + str(len(soup.body.find_all('div', class_='pet-detail-gallery-column-photo')))
-        try:
-            if 'facebook' not in str(soup.body.find_all('strong')[8]):
-                CatIn += '\n\n' + str(soup.body.find_all('strong')[8]).replace('<strong>', '').replace('</strong>', '')
-        except IndexError:
-            print('Problem with' + link)
-            # print(soup.body.find_all('strong'))
-            # print(len(soup.body.find_all('strong')))
-
-        #     soup.body.find_all('strong')[7]
-
-        ImagePath = requests.get(
-            str(soup.body.find_all('img', class_='pet-detail-main-image')).split('data-src=')[1].split(' ')[0].replace(
-                '"', ''))
-        fixed_height = 150
-        image = Image.open(BytesIO(ImagePath.content))
-        height_percent = (fixed_height / float(image.size[0]))
-        width_size = int((float(image.size[1]) * float(height_percent)))
-        CatImage = image.resize((fixed_height, width_size), PIL.Image.NEAREST)
-        CatDesc = str(soup.body.find_all('div', class_='pet-description')).split('>')[1].split('<')[0].split(
-            'Zapraszamy do zapoznania się z ankietą')[0]
-        if "pilne" in CatStat:
-            CatIn += '\n\nPILNE'
-        if 'Ochota na Kota' in CatStat:
-            CatIn += '\n\nOchota na Kota'
-
-        if not ("tymczaso" or "fundacja") in CatStat:
-            return CatID, CatName, CatAge, CatIn, CatDesc, CatStat, CatImage
-        else:
-            return 0, 0, 0, 0, 0, CatStat, 0
-
-    def get_links_to_cats(self, soup, links):
-        # sciaga linki z danej podstrony
-        # links = []
-        for link in soup.findAll('a', attrs={'href': re.compile("/pet/")}):
-            links.append(link.get('href'))
-        return links
-
-    def get_max_page(self, soup):
-        # podaje liczbe podstron do sciagania
-        nums = []
-        for link in soup.findAll('a', attrs={'href': re.compile("pet_page=")}):
-            nums.append(int(link.get('href').split('?')[1].split('=')[1].split('&')[0]))
-        return max(nums)
-
-    def getsoup(self, link):
-        odpowiedz = requests.get(link)
-        return BeautifulSoup(odpowiedz.text, 'html.parser')
-
-    def get_all_cat_links(self, linkMain, linkEnd):
-        odpowiedz = requests.get(linkMain + str(1) + linkEnd)
-        soup = BeautifulSoup(odpowiedz.text, 'lxml')
-        maxcount = self.get_max_page(soup)
-        links = []
-        for k in range(1, maxcount + 1):
-            soup = self.getsoup(linkMain + str(k) + linkEnd)
-            links = self.get_links_to_cats(soup, links)
-        return np.unique(links)
+        species = 'koty' if self.kotybool else 'psy'
+        scraper = PaluchScraper(self.my_datadir2 + 'cache.kotolizer')
+        animals = scraper.get_animals(species)
+        wx.CallAfter(self.postep.SetRange, len(animals))
+        rows = []
+        fetched = 0
+        for count, a in enumerate(animals):
+            self.status('Zwierzę %d z %d: %s' % (count + 1, len(animals), a['name'] or a['number']))
+            details, new = scraper.get_details(a['link'], referer=LIST_URLS[species])
+            if new:
+                fetched += 1
+                if fetched % 20 == 0:
+                    scraper.save_cache()
+            details = details or {}
+            CatImage = scraper.get_thumbnail(a['image'], referer=a['link'])
+            location = details.get('location', '')
+            if location == 'Brak danych':
+                location = ''
+            if 'Ochota' in location and 'Ochota na Kota' not in location:
+                location += ' (Ochota na Kota)'
+            CatIn = details.get('date', '')
+            CatIn += '\n\nZdjęć:' + str(details.get('photos', ''))
+            CatIn += '\n\nRasa: ' + a['breed']
+            if a['urgent']:
+                CatIn += '\n\nPILNE'
+            if location:
+                CatIn += '\n\n' + location  # ostatnia linia jest używana w statystyce "Miejsca"
+            rows.append({'Nr': count + 1, 'ID': int(a['number']),
+                         'Imię': a['name'] + '\n' + details.get('sex', a['sex']),
+                         'Wiek': a['age'], 'Przyjęcie': CatIn, 'Foto': CatImage,
+                         'Ogłoszenie': details.get('desc', '')})
+            wx.CallAfter(self.postep.SetValue, count + 1)
+        scraper.save_cache()
+        print('Zwierząt: %d, pobranych stron zwierząt: %d' % (len(animals), fetched))
+        catframe = pd.DataFrame(rows, columns=['Nr', 'ID', 'Imię', 'Wiek', 'Przyjęcie', 'Foto', 'Ogłoszenie'])
+        catframe.to_pickle(self.my_datadir2 + self.prefix() + self.today + '.kotolizer', compression='bz2')
+        self.frames.pop((self.prefix(), self.today), None)
+        return len(animals), fetched
 
     def getframecur(self, b):
-        if b.Value != self.nadzis:
-            if self.kotybool:
-                df = pd.read_pickle(self.my_datadir2 + 'Miau' + b.Value + '.kotolizer',
-                                    compression='bz2')
-            else:
-                df = pd.read_pickle(self.my_datadir2 + 'Hau' +  b.Value + '.kotolizer',
-                                    compression='bz2')
-            catframe = df.sort_values('ID')
-
-        else:
-            catframe = self.catframe.sort_values('ID')
-        return catframe
+        key = (self.prefix(), b.GetStringSelection())
+        if key not in self.frames:
+            df = pd.read_pickle(self.my_datadir2 + key[0] + key[1] + '.kotolizer', compression='bz2')
+            self.frames[key] = df.sort_values('ID')
+        return self.frames[key]
 
     def comparedf(self,one, two):
         kiki = pd.concat([one, two]).drop_duplicates(subset='ID', keep=False)
@@ -703,69 +596,27 @@ class GeneralLayout(scrolled.ScrolledPanel):
                      'Wiek_x': 'Wiek', 'Foto_x': 'Foto'})
         return df3
     def genword(self, event):
+        pathname = self.ask_path('Zapisz listę zwierząt', 'Word (*.docx)|*.docx', self.filename('lista', 'docx'))
+        if pathname:
+            self.status('Tworzenie dokumentu Word…')
+            self.run_task(self.createwordfile, (pathname, self.getframecur(self.backup)),
+                          lambda r: 'Zapisano: ' + os.path.basename(pathname))
 
-        with wx.FileDialog(self, "Save file", wildcard="DOCX files (*.docx)|*.docx",
-                           style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as fileDialog:
-            if fileDialog.ShowModal() == wx.ID_CANCEL:
-                return  # the user changed their mind
-
-            # save the current contents in the file
-            pathname = fileDialog.GetPath()
-            catframe=self.getframecur(self.backup)
-
-            first2 = Thread(target=self.createwordfile, args=(pathname,catframe,))
-            first2.setDaemon(True)
-            first2.start()
-            print(pathname)
-            # self.createwordfile(self.catframe, pathname)
-        print('Done')
     def genwordNew(self, event):
-        catframe = self.getframecur(self.backup)
-        catframe2 = self.getframecur(self.backup2)
-        Nowekoty = self.comparedf(catframe, catframe2)
-        if Nowekoty.shape[0] == 0:
-            dlg = wx.MessageDialog(self, 'Nie przybyło zwierzaków', 'Nie ma nowych zwierząt w porówaniu').ShowModal()
-        else:
-            with wx.FileDialog(self, "Save file", wildcard="DOCX files (*.docx)|*.docx",
-                               style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as fileDialog:
-                if fileDialog.ShowModal() == wx.ID_CANCEL:
-                    return  # the user changed their mind
+        Nowekoty = self.comparedf(self.getframecur(self.backup), self.getframecur(self.backup2))
+        pathname = self.ask_path('Zapisz listę nowych zwierząt', 'Word (*.docx)|*.docx',
+                                 self.filename('nowe', 'docx', True))
+        if pathname:
+            self.status('Tworzenie dokumentu Word…')
+            self.run_task(self.createwordfile, (pathname, Nowekoty), lambda r: 'Zapisano: ' + os.path.basename(pathname))
 
-                # save the current contents in the file
-                pathname = fileDialog.GetPath()
-                # catframe=self.getframecur(self.backup)
-                # catframe2=self.getframecur(self.backup2)
-                # Nowekoty = self.comparedf(catframe, catframe2)
-
-
-                first2 = Thread(target=self.createwordfile, args=(pathname,Nowekoty,))
-                first2.setDaemon(True)
-                first2.start()
-                print(pathname)
-            # self.createwordfile(self.catframe, pathname)
-        print('Done')
     def genwordOld(self, event):
-        catframe = self.getframecur(self.backup)
-        catframe2 = self.getframecur(self.backup2)
-        # Nowekoty = comparedf(catframe, zeszly_tydzien)
-        Zniknietekoty = self.comparedf(catframe2, catframe)
-        if Zniknietekoty.shape[0] == 0:
-            dlg = wx.MessageDialog(self, 'Nie ubyło zwierzaków', 'Stan zwierząt nie zmniejszył się').ShowModal()
-        else:
-            with wx.FileDialog(self, "Save file", wildcard="DOCX files (*.docx)|*.docx",
-                               style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as fileDialog:
-                if fileDialog.ShowModal() == wx.ID_CANCEL:
-                    return  # the user changed their mind
-
-                # save the current contents in the file
-                pathname = fileDialog.GetPath()
-
-                first2 = Thread(target=self.createwordfile, args=(pathname,Zniknietekoty,))
-                first2.setDaemon(True)
-                first2.start()
-                print(pathname)
-            # self.createwordfile(self.catframe, pathname)
-        print('Done')
+        Zniknietekoty = self.comparedf(self.getframecur(self.backup2), self.getframecur(self.backup))
+        pathname = self.ask_path('Zapisz listę znikniętych zwierząt', 'Word (*.docx)|*.docx',
+                                 self.filename('znikniete', 'docx', True))
+        if pathname:
+            self.status('Tworzenie dokumentu Word…')
+            self.run_task(self.createwordfile, (pathname, Zniknietekoty), lambda r: 'Zapisano: ' + os.path.basename(pathname))
 
     def createwordfile(self, pathname,catframe):
 
@@ -859,29 +710,106 @@ class GeneralLayout(scrolled.ScrolledPanel):
     # create your program's directory
 
 
-    def findbackups(self):
-        # Dir=self.path
-        self.listbackups = []
-        self.listbackups.append('Current')
-        self.backup.Clear()
-        self.backup.Append('Current')
-        self.backup.SetValue('Current')
-        a = 0
-        for name in os.listdir(self.path):
-            if (('Reconstructed_back' in name)) and os.path.isfile(
-                    self.path + '/' + name + '/params.nmr'):
-                self.listbackups.append(name.replace('Reconstructed_back_at', ''))
-                self.backup.Append(name.replace('Reconstructed_back_at', ''))
-                a += 1
-        if a > 0:
-            self.backup.Enable()
-            self.backuplistNOTgenerated = False
+class HistCanvas(wx.Panel):
+    """Pokazuje figurę matplotlib dopasowaną do rozmiaru okna.
+
+    Figura jest renderowana (Agg) do obrazka dokładnie w rozmiarze panelu,
+    w rozdzielczości ekranu (np. 2x na Retinie), więc skaluje się poprawnie
+    niezależnie od wersji matplotlib i wxPython.
+    """
+
+    def __init__(self, parent, fig):
+        wx.Panel.__init__(self, parent, style=wx.FULL_REPAINT_ON_RESIZE)
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
+        self.fig = fig
+        self.agg = FigureCanvasAgg(fig)
+        self.bmp = None
+        self.scale = 1.0
+        self.timer = wx.CallLater(1, self.render)
+        self.SetMinSize((300, 250))
+        self.Bind(wx.EVT_SIZE, self.on_size)
+        self.Bind(wx.EVT_PAINT, self.on_paint)
+
+    def on_size(self, event):
+        self.timer.Start(80)  # przerysuj dopiero, gdy użytkownik skończy zmieniać rozmiar
+        event.Skip()
+
+    def render(self):
+        w, h = self.GetClientSize()
+        if w < 10 or h < 10:
+            return
+        scale = self.GetContentScaleFactor() if hasattr(self, 'GetContentScaleFactor') else 1.0
+        self.fig.set_size_inches(w / 100.0, h / 100.0)
+        self.fig.set_dpi(100.0 * scale)
+        self.agg.draw()
+        W, H = self.agg.get_width_height()
+        self.bmp = wx.Bitmap.FromBufferRGBA(W, H, bytes(self.agg.buffer_rgba()))
+        self.scale = W / float(w)
+        self.Refresh()
+
+    def on_paint(self, event):
+        dc = wx.PaintDC(self)
+        dc.SetBackground(wx.WHITE_BRUSH)
+        dc.Clear()
+        if self.bmp is not None:
+            dc.SetUserScale(1.0 / self.scale, 1.0 / self.scale)
+            dc.DrawBitmap(self.bmp, 0, 0)
+
+
+class HistFrame(wx.Frame):
+    """Okno z histogramem i przyciskiem do zapisania go jako obraz."""
+
+    SAVE_SIZE = (13, 11)  # rozmiar zapisywanego obrazka w calach (niezależny od rozmiaru okna)
+
+    def __init__(self, parent, fig, title, defaultfile):
+        area = wx.Display(wx.Display.GetFromWindow(parent) if parent else 0).GetClientArea()
+        size = (min(1100, int(area.width * 0.9)), min(900, int(area.height * 0.9)))
+        wx.Frame.__init__(self, parent, title=title, size=size)
+        self.fig = fig
+        self.defaultfile = defaultfile
+        panel = wx.Panel(self)
+        self.canvas = HistCanvas(panel, fig)
+        save = wx.Button(panel, label='Zapisz…')
+        Tooltipset(save, 'Zapisz histogram jako obraz PNG, PDF lub SVG')
+        close = wx.Button(panel, label='Zamknij')
+        save.Bind(wx.EVT_BUTTON, self.save)
+        close.Bind(wx.EVT_BUTTON, lambda e: self.Close())
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        buttons.Add(save, 0, wx.RIGHT, 8)
+        buttons.Add(close, 0)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(self.canvas, 1, wx.EXPAND)
+        sizer.Add(buttons, 0, wx.ALL | wx.ALIGN_RIGHT, 8)
+        panel.SetSizer(sizer)
+        self.CreateStatusBar()
+        self.SetStatusText('Histogram nie jest jeszcze zapisany – kliknij „Zapisz…”, aby zapisać go do pliku.')
+        self.Centre()
+
+    def save(self, event):
+        with wx.FileDialog(self, 'Zapisz histogram', defaultFile=self.defaultfile,
+                           wildcard='PNG (*.png)|*.png|PDF (*.pdf)|*.pdf|SVG (*.svg)|*.svg',
+                           style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as dialog:
+            if dialog.ShowModal() == wx.ID_CANCEL:
+                return
+            path = dialog.GetPath()
+        ext = ('.png', '.pdf', '.svg')[dialog.GetFilterIndex()]
+        if not os.path.splitext(path)[1]:
+            path += ext
+        try:
+            self.fig.set_size_inches(*self.SAVE_SIZE)
+            self.fig.savefig(path, dpi=150)
+        except Exception as e:
+            wx.MessageDialog(self, str(e), 'Błąd', wx.OK | wx.ICON_ERROR).ShowModal()
+            return
+        finally:
+            self.canvas.render()  # przywróć rozmiar dopasowany do okna
+        self.SetStatusText('Zapisano: ' + path)
 
 
 class CatFrame(wx.Frame):
     def __init__(self):
         wx.Frame.__init__(self, None, title="Kotolizator 3000 - Analizator stanu zwierząt w schronisku na Paluchu",
-                          size=(800, 500))
+                          )
         nolog = wx.LogNull()  # windows alert fix
 
         if platform.system() == 'Linux' and getattr(sys, 'frozen', False):
@@ -911,9 +839,11 @@ class CatFrame(wx.Frame):
         self.verSizer.Add(self.nb, 1, wx.ALL | wx.EXPAND, 0)
         self.firstimeclick = True
         self.statusbar = self.CreateStatusBar()
-        self.Centre()
         self.p.SetSizer(self.verSizer)
-        self.p.Fit()
+        best = self.nb.GetSizer().GetMinSize()
+        self.SetClientSize((max(best.width, 560) + 20, best.height + 10))
+        self.SetMinClientSize((560, 300))
+        self.Centre()
         self.statusbar.SetStatusText(
             'Mateusz Urbańczyk z dedykacją dla Karoliny')
 
