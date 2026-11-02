@@ -51,7 +51,9 @@ def test_age_months():
 
 def test_miejsce():
     assert dane.miejsce('data\n\nPILNE\n\nOchota na Kota') == 'Ochota na Kota'
+    assert dane.miejsce('data\n\nOchota na Kota – kontener F') == 'Ochota na Kota'
     assert dane.miejsce('data\n\nRasa: EUROPEJSKA') == 'brak informacji'
+    assert dane.miejsce('data\n\n071 R4') == 'brak informacji'
 
 
 def test_build_row():
@@ -62,11 +64,37 @@ def test_build_row():
     assert row['ID'] == '0958/26'
     assert row['Imię'] == 'Loki\nsamiec'
     assert 'PILNE' in row['Przyjęcie']
-    assert row['Przyjęcie'].endswith('Ochota (Ochota na Kota)')
-    assert dane.miejsce(row['Przyjęcie']).startswith('Ochota')
+    assert row['Przyjęcie'].endswith('Ochota na Kota')
+    assert dane.miejsce(row['Przyjęcie']) == 'Ochota na Kota'
     # bez strony zwierzęcia (np. strona zablokowała pobieranie)
     row = dane.build_row(2, animal, None, None)
     assert row['Imię'] == 'Loki\n' and row['Ogłoszenie'] == ''
+
+
+def test_build_row_ochota_from_page_or_badge():
+    animal = {'number': '0883', 'year': '26', 'name': 'Czarek', 'sex': '', 'breed': 'EUROPEJSKI',
+              'age': '13 lat', 'urgent': False, 'ochota': True}
+    details = {'sex': 'samiec', 'date': '7 października 2026', 'location': 'kontener F', 'photos': 30,
+               'badges': ['Do adopcji', 'Ochota na kota']}
+    row = dane.build_row(1, animal, details, None)
+    assert row['Przyjęcie'].endswith('Ochota na Kota – kontener F')
+    assert 'Status: Do adopcji' in row['Przyjęcie']
+    assert 'Ochota na Kota' in row['Przyjęcie']  # zaznaczenie w Wordzie
+    animal['ochota'] = False  # strona Ochoty się nie wczytała - wystarczy odznaka
+    assert dane.miejsce(dane.build_row(1, animal, details, None)['Przyjęcie']) == 'Ochota na Kota'
+
+
+def test_build_row_found_animal():
+    animal = {'number': '0963', 'year': '26', 'name': '', 'sex': '', 'breed': '', 'age': '', 'urgent': False,
+              'found': '1 listopada 2026', 'found_where': 'Warszawa, ul. Gwiaździsta', 'ochota': False}
+    details = {'sex': 'samica', 'date': '1 listopada 2026', 'location': '', 'photos': 1,
+               'fields': {'Wiek': '2 lata', 'Typ rasy': 'EUROPEJSKA'}, 'badges': ['Nie do adopcji']}
+    row = dane.build_row(1, animal, details, None)
+    assert row['Wiek'] == '2 lata'
+    assert 'Rasa: EUROPEJSKA' in row['Przyjęcie']
+    assert 'Ostatnio znaleziony: 1 listopada 2026, Warszawa, ul. Gwiaździsta' in row['Przyjęcie']
+    s = dane.summary(pd.DataFrame([row], columns=dane.COLUMNS))
+    assert s.iloc[0]['Status'] == 'Nie do adopcji; Ostatnio znaleziony: 1 listopada 2026, Warszawa, ul. Gwiaździsta'
 
 
 def test_summary_days_in_shelter():

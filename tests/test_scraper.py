@@ -50,6 +50,39 @@ def test_parse_details():
     assert d['desc'].startswith('Loki to malutki kotek')
     assert 'Zapraszamy do' not in d['desc']
     assert d['fields']['Identyfikator'] == '0958/26'
+    assert d['badges'] == ['Do adopcji']
+
+
+def test_parse_details_ochota_badge():
+    d = S.PaluchScraper.parse_details(soup('kot_ochota.html'))
+    assert d['fields']['Identyfikator'] == '0883/26'
+    assert d['location'] == 'kontener F'
+    assert d['badges'] == ['Do adopcji', 'Ochota na kota']
+
+
+def test_dogs():
+    cards = S.PaluchScraper.parse_cards(soup('lista_psy.html'))
+    assert len(cards) == 3
+    assert all(c['link'].endswith('p/') for c in cards)
+    assert cards[1]['urgent']
+    assert cards[2]['year'] == '17'
+    d = S.PaluchScraper.parse_details(soup('pies.html'))
+    assert d['sex'] == 'samiec' and d['fields']['Wiek'] == '4 lata'
+    assert d['location'] == '071 R4'
+    assert d['badges'] == ['Nie do adopcji']
+
+
+def test_found_cards():
+    cards = S.PaluchScraper.parse_cards(soup('znalezione_koty.html'))
+    assert len(cards) == 3
+    c = cards[0]
+    assert c['name'] == '' and c['age'] == '' and c['breed'] == ''
+    assert c['found'] and c['found_where'].startswith('Warszawa')
+
+
+def test_ochota_page_cards():
+    cards = S.PaluchScraper.parse_cards(soup('ochota.html'))
+    assert [c['name'] for c in cards] == ['Eros', 'Piania', 'Czarek', 'Teofil', 'Eos']
 
 
 class FakeResponse:
@@ -80,23 +113,44 @@ def test_get_animals_and_cache(tmp_path):
         lista = f.read()
     with open(os.path.join(FIXTURES, 'zwierze.html'), encoding='utf-8') as f:
         zwierze = f.read()
-    pages = {'koty-do-adopcji': FakeResponse(lista), '/animal/': FakeResponse(zwierze)}
+    with open(os.path.join(FIXTURES, 'znalezione_koty.html'), encoding='utf-8') as f:
+        znalezione = f.read()
+    pages = {'koty-do-adopcji': FakeResponse(lista), 'gatunek-kot': FakeResponse(znalezione),
+             '/animal/': FakeResponse(zwierze)}
     sc, calls = make_scraper(tmp_path, pages)
     animals = sc.get_animals('koty')
-    assert len(animals) == 4
+    assert len(animals) == 4 + 3  # do adopcji + ostatnio znalezione
+    assert sum(1 for a in animals if a['found']) == 3
     for a in animals:
         details, new = sc.get_details(a['link'])
         assert new and details['sex'] == 'samiec'
     sc.save_cache()
-    assert len(calls) == 1 + 4
+    assert len(calls) == 3 + 7  # lista, znalezione, Ochota na Kota + strony zwierząt
 
-    # drugie uruchomienie: szczegóły z pamięci podręcznej, tylko lista jest pobierana
+    # drugie uruchomienie: szczegóły z pamięci podręcznej, pobierane są tylko 3 listy
     sc2, calls2 = make_scraper(tmp_path, pages)
     sc2.get_animals('koty')
     for a in animals:
         details, new = sc2.get_details(a['link'])
         assert not new and details['date'] == '29 października 2026'
-    assert len(calls2) == 1
+    assert len(calls2) == 3
+
+
+def test_ochota_marks_cats(tmp_path):
+    with open(os.path.join(FIXTURES, 'ochota.html'), encoding='utf-8') as f:
+        ochota = f.read()
+    # lista do adopcji to tu te same koty, które są na stronie Ochoty na Kota
+    sc, _ = make_scraper(tmp_path, {'koty-do-adopcji': FakeResponse(ochota), 'ochota-na-kota': FakeResponse(ochota)})
+    assert all(a['ochota'] for a in sc.get_animals('koty'))
+
+
+def test_dogs_skip_ochota(tmp_path):
+    with open(os.path.join(FIXTURES, 'lista_psy.html'), encoding='utf-8') as f:
+        psy = f.read()
+    sc, calls = make_scraper(tmp_path, {'psy-do-adopcji': FakeResponse(psy)})
+    assert len(sc.get_animals('psy')) == 3
+    assert not any('ochota' in url for url in calls)
+    assert any('gatunek-pies' in url for url in calls)
 
 
 def test_empty_list_is_an_error(tmp_path):

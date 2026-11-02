@@ -3,8 +3,8 @@ Program do analizy strony Schroniska na Paluchu. Umożliwia utworzenie zestawie�
 Program używa jedynie danych dostępnych publicznie na stronie https://napaluchu.waw.pl/.  Zadaniem programu jest ułatwienie życia wolontariuszom schroniska.
 
 #### Co potrafi
-- pobiera aktualną listę kotów lub psów ze strony schroniska i zapisuje ją pod dzisiejszą datą,
-- **Przeglądaj i szukaj** – tabela wszystkich zwierząt z wyszukiwarką (imię, numer, wiek, płeć, miejsce) i sortowaniem po kliknięciu nagłówka; widoczne wiersze można zapisać do Excela,
+- pobiera aktualną listę kotów lub psów do adopcji ze strony schroniska razem z ostatnio znalezionymi zwierzętami i zapisuje ją pod dzisiejszą datą; koty przebywające w punkcie Ochota na Kota są oznaczane,
+- **Przeglądaj i szukaj** – tabela wszystkich zwierząt z wyszukiwarką (imię, numer, wiek, płeć, miejsce, status – np. „Nie do adopcji” albo „znaleziony”) i sortowaniem po kliknięciu nagłówka; widoczne wiersze można zapisać do Excela,
 - **Najdłużej czekające** – ta sama tabela posortowana według liczby dni w schronisku (warto je promować),
 - lista zwierząt w Wordzie (ze zdjęciami, pilne adopcje na czerwono, Ochota na Kota na fioletowo), krótka tabelka w Excelu, histogramy wieku i liczba zwierząt w poszczególnych miejscach,
 - porównanie dwóch dni: które zwierzęta są nowe, a które zniknęły z listy (np. zostały adoptowane),
@@ -41,6 +41,7 @@ Na macOS przy pierwszym uruchomieniu niepodpisanej aplikacji trzeba kliknąć j�
 
 #### Oszczędzanie połączeń
 Lista zwierząt (`/zwierzeta/koty-do-adopcji/` lub `/zwierzeta/psy-do-adopcji/`) to jedno zapytanie – są na niej imię, numer, wiek, zdjęcie i oznaczenie „do pilnej adopcji”.
-Strona każdego zwierzęcia (płeć, data przyjęcia, lokalizacja, opis, liczba zdjęć) jest pobierana raz i trzymana w pamięci podręcznej przez 7 dni, a miniatury zdjęć są pobierane tylko raz (`cache.kotolizer` w katalogu danych programu).
+Do tego jedno zapytanie o ostatnio znalezione zwierzęta danego gatunku (`/zwierzeta/ostatnio-znalezione/gatunek-kot/` lub `gatunek-pies/`), a dla kotów jedno o stronę `/o-schronisku/ochota-na-kota/`, na której są koty przebywające w tym punkcie.
+Strona każdego zwierzęcia (płeć, data przyjęcia, lokalizacja, status, opis, liczba zdjęć) jest pobierana raz i trzymana w pamięci podręcznej przez 7 dni, a miniatury zdjęć są pobierane tylko raz (`cache.kotolizer` w katalogu danych programu).
 Pierwsze uruchomienie pobiera wszystko (kilka minut), kolejne – tylko listę i nowe zwierzaki.
 Pobieranie korzysta z jednej sesji HTTP, robi przerwy z losowym odstępem między zapytaniami i ponawia je z rosnącym opóźnieniem przy błędach 429/5xx. Jeśli strona zacznie blokować zapytania (403/429), program przestaje pobierać i korzysta z danych z pamięci podręcznej.

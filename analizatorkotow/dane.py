@@ -12,7 +12,7 @@ MONTHS = {'stycznia': 1, 'lutego': 2, 'marca': 3, 'kwietnia': 4, 'maja': 5, 'cze
 # miejsca rozpoznawane w ostatniej linii kolumny "Przyjęcie"
 MIEJSCA = ['Azyl', 'Ochota', 'właściciela']
 
-SUMMARY_COLUMNS = ['Nr', 'ID', 'Imię', 'Płeć', 'Wiek', 'Przyjęto', 'Dni w schronisku', 'Pilne', 'Miejsce']
+SUMMARY_COLUMNS = ['Nr', 'ID', 'Imię', 'Płeć', 'Wiek', 'Przyjęto', 'Dni w schronisku', 'Pilne', 'Miejsce', 'Status']
 
 
 # --- numery zwierząt ---
@@ -90,7 +90,20 @@ def admission_date(przyjecie):
 def miejsce(przyjecie):
     """Miejsce pobytu z ostatniej linii kolumny 'Przyjęcie' albo 'brak informacji'."""
     last = str(przyjecie).split('\n')[-1]
+    if 'Ochota' in last:
+        return 'Ochota na Kota'
     return last if any(m in last for m in MIEJSCA) else 'brak informacji'
+
+
+def status(przyjecie):
+    """Odznaki stanu zwierzęcia i informacja o znalezieniu z kolumny 'Przyjęcie'."""
+    parts = []
+    for line in str(przyjecie).split('\n'):
+        if line.startswith('Status: '):
+            parts.append(line[len('Status: '):])
+        elif line.startswith('Ostatnio znaleziony'):
+            parts.append(line)
+    return '; '.join(parts)
 
 
 # --- budowanie zestawień ---
@@ -98,21 +111,32 @@ def miejsce(przyjecie):
 def build_row(nr, animal, details, image):
     """Wiersz zestawienia z danych karty z listy i strony zwierzęcia."""
     details = details or {}
+    fields = details.get('fields', {})
+    badges = details.get('badges', [])
     location = details.get('location', '')
     if location == 'Brak danych':
         location = ''
-    if 'Ochota' in location and 'Ochota na Kota' not in location:
-        location += ' (Ochota na Kota)'
+    ochota = (animal.get('ochota') or 'Ochota' in location
+              or any('ochota na kota' in b.lower() for b in badges))
+    urgent = animal['urgent'] or any('pilnej' in b.lower() for b in badges)
     przyjecie = details.get('date', '')
     przyjecie += '\n\nZdjęć:' + str(details.get('photos', ''))
-    przyjecie += '\n\nRasa: ' + animal['breed']
-    if animal['urgent']:
+    przyjecie += '\n\nRasa: ' + (animal['breed'] or fields.get('Typ rasy', ''))
+    status_badges = [b for b in badges if 'ochota' not in b.lower()]
+    if status_badges:
+        przyjecie += '\n\nStatus: ' + ', '.join(status_badges)
+    if animal.get('found'):
+        przyjecie += '\n\nOstatnio znaleziony: ' + ', '.join(x for x in (animal['found'], animal.get('found_where')) if x)
+    if urgent:
         przyjecie += '\n\nPILNE'
-    if location:
-        przyjecie += '\n\n' + location  # ostatnia linia jest używana w statystyce miejsc
+    # ostatnia linia jest używana w statystyce miejsc
+    if ochota:
+        przyjecie += '\n\nOchota na Kota' + (' – ' + location if location and 'Ochota' not in location else '')
+    elif location:
+        przyjecie += '\n\n' + location
     return {'Nr': nr, 'ID': animal_id(animal['number'], animal['year']),
             'Imię': animal['name'] + '\n' + details.get('sex', animal['sex']),
-            'Wiek': animal['age'], 'Przyjęcie': przyjecie, 'Foto': image,
+            'Wiek': animal['age'] or fields.get('Wiek', ''), 'Przyjęcie': przyjecie, 'Foto': image,
             'Ogłoszenie': details.get('desc', '')}
 
 
@@ -133,6 +157,7 @@ def summary(frame, today=None):
             'Dni w schronisku': (today - przyjeto).days if przyjeto else None,
             'Pilne': 'tak' if 'PILNE' in str(r['Przyjęcie']) else '',
             'Miejsce': miejsce(r['Przyjęcie']),
+            'Status': status(r['Przyjęcie']),
             '_wiek': age_months(r['Wiek']),
         })
     return pd.DataFrame(rows, columns=SUMMARY_COLUMNS + ['_wiek'])

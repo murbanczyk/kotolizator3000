@@ -192,7 +192,12 @@ class GeneralLayout(scrolled.ScrolledPanel):
 
     def status(self, msg):
         """Komunikat pod paskiem postępu; można wołać z dowolnego wątku."""
-        wx.CallAfter(self.statustxt.SetLabel, msg)
+        wx.CallAfter(self.set_status, msg)
+
+    def set_status(self, msg):
+        self.statustxt.SetLabel(msg)
+        self.statustxt.Wrap(max(self.GetClientSize().width - 20, 200))  # długi komunikat w kilku liniach
+        self.Layout()
 
     def find_dates(self):
         dates = []
@@ -292,10 +297,10 @@ class GeneralLayout(scrolled.ScrolledPanel):
         self.busy = False
         self.update_buttons()
         if error is not None:
-            self.statustxt.SetLabel('Wystąpił błąd.')
+            self.set_status('Wystąpił błąd.')
             error_dialog(self, error)
         elif msg:
-            self.statustxt.SetLabel(msg)
+            self.set_status(msg)
 
     def ask_path(self, title, wildcard, default):
         with wx.FileDialog(self, title, wildcard=wildcard, defaultFile=default,
@@ -312,7 +317,7 @@ class GeneralLayout(scrolled.ScrolledPanel):
 
     def switchkotpies(self, event):
         self.kotybool = self.gatunek.GetSelection() == 0
-        self.statustxt.SetLabel('')
+        self.set_status('')
         self.postep.SetValue(0)
         self.refresh_dates()
 
@@ -336,9 +341,15 @@ class GeneralLayout(scrolled.ScrolledPanel):
         self.run_task(self.parsepaluch2, (), self.parse_done)
 
     def parse_done(self, result):
-        n, fetched = result
+        n, fetched, found, ochota = result
         wx.CallAfter(self.refresh_dates, self.today)
-        return 'Pobrano dane: %d %s (nowych lub odświeżonych stron zwierząt: %d).' % (n, self.zwierzeta(), fetched)
+        print('Nowych lub odświeżonych stron zwierząt: %d' % fetched)
+        extra = []
+        if ochota:
+            extra.append('%d na Ochocie na Kota' % ochota)
+        if found:
+            extra.append('%d ostatnio znalezionych' % found)
+        return 'Pobrano %d %s%s.' % (n, self.zwierzeta(), ' (' + ', '.join(extra) + ')' if extra else '')
 
     def parsepaluch2(self):
         species = 'koty' if self.kotybool else 'psy'
@@ -362,7 +373,9 @@ class GeneralLayout(scrolled.ScrolledPanel):
         catframe = pd.DataFrame(rows, columns=dane.COLUMNS)
         catframe.to_pickle(self.my_datadir2 + self.prefix() + self.today + '.kotolizer', compression='bz2')
         self.frames.pop((self.prefix(), self.today), None)
-        return len(animals), fetched
+        found = sum(1 for a in animals if a.get('found'))
+        ochota = sum(1 for r in rows if dane.miejsce(r['Przyjęcie']) == 'Ochota na Kota')
+        return len(animals), fetched, found, ochota
 
     # --- przeglądanie ---
 
@@ -413,7 +426,7 @@ class GeneralLayout(scrolled.ScrolledPanel):
                     if 'Ochota' in str(miejsce):
                         for cell in sheet[row]:
                             cell.font = bold
-            self.statustxt.SetLabel('Zapisano: ' + os.path.basename(pathname))
+            self.set_status('Zapisano: ' + os.path.basename(pathname))
             self.openfile(pathname)
 
     def genword(self, event):
@@ -559,7 +572,7 @@ class GeneralLayout(scrolled.ScrolledPanel):
             error_dialog(self, e)
             return
         ChartFrame(self, fig, title, defaultfile).Show()
-        self.statustxt.SetLabel('Otwarto histogram: ' + title)
+        self.set_status('Otwarto histogram: ' + title)
 
     def histfigure(self, catframe):
         """Rysuje histogramy wieku (wszystkie, samice, samce) i zwraca gotową figurę."""
@@ -642,11 +655,11 @@ class BrowseFrame(wx.Frame):
     """Tabela zwierząt z wyszukiwarką, sortowaniem po kliknięciu nagłówka i zapisem do Excela."""
 
     COLUMNS = [('Nr', 45), ('ID', 75), ('Imię', 130), ('Płeć', 70), ('Wiek', 95), ('Przyjęto', 90),
-               ('Dni w schronisku', 135), ('Pilne', 50), ('Miejsce', 170)]
+               ('Dni w schronisku', 135), ('Pilne', 50), ('Miejsce', 120), ('Status', 380)]
     NUMERIC = {'Nr': 'Nr', 'Dni w schronisku': 'Dni w schronisku', 'Wiek': '_wiek'}
 
     def __init__(self, parent, table, title, defaultfile, sort_col=None, descending=False):
-        wx.Frame.__init__(self, parent, title=title, size=window_size(parent, 920, 700))
+        wx.Frame.__init__(self, parent, title=title, size=window_size(parent, 1300, 700))
         self.table = table
         self.defaultfile = defaultfile
         self.sort_col = sort_col
@@ -655,7 +668,7 @@ class BrowseFrame(wx.Frame):
         panel = wx.Panel(self)
         self.search = wx.SearchCtrl(panel)
         self.search.ShowCancelButton(True)
-        self.search.SetDescriptiveText('Szukaj: imię, numer, wiek, płeć, miejsce…')
+        self.search.SetDescriptiveText('Szukaj: imię, numer, wiek, płeć, miejsce, status (np. „znaleziony”)…')
         self.search.Bind(wx.EVT_TEXT, lambda e: self.refresh())
         self.search.Bind(wx.EVT_SEARCHCTRL_CANCEL_BTN, lambda e: self.search.SetValue(''))
         self.list = wx.ListCtrl(panel, style=wx.LC_REPORT | wx.LC_SINGLE_SEL)

@@ -20,6 +20,15 @@ LIST_URLS = {
     'psy': BASE_URL + 'zwierzeta/psy-do-adopcji/',
 }
 
+# ostatnio znalezione zwierzeta danego gatunku (moga jeszcze trafic do wlascicieli)
+FOUND_URLS = {
+    'koty': BASE_URL + 'zwierzeta/ostatnio-znalezione/gatunek-kot/',
+    'psy': BASE_URL + 'zwierzeta/ostatnio-znalezione/gatunek-pies/',
+}
+
+# strona punktu adopcyjnego Ochota na Kota z karta kazdego kota, ktory tam przebywa
+OCHOTA_URL = BASE_URL + 'o-schronisku/ochota-na-kota/'
+
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
                   '(KHTML, like Gecko) Chrome/124.0 Safari/537.36',
@@ -124,13 +133,13 @@ class PaluchScraper:
                 name = text
                 m = re.search(r'/animal/(\d+)-(\d+)', link['href'])
                 number, year = (m.group(1), m.group(2)) if m else ('0', '')
+            # pola karty: napis zakończony dwukropkiem to etykieta, następny napis to wartość
+            # (np. 'Rasa:' 'EUROPEJSKA', 'Wiek:' '2 miesiące', 'Znaleziono:' '2 listopada 2026', 'Gdzie:' ...)
             fields = {}
-            for item in card.select('.fusion-li-item-content'):
-                label = item.find('strong')
-                if label is not None:
-                    key = label.get_text(strip=True).rstrip(':')
-                    label.extract()
-                    fields[key] = item.get_text(' ', strip=True)
+            strings = list(card.stripped_strings)
+            for i, t in enumerate(strings[:-1]):
+                if t.endswith(':') and t[:-1].strip() not in fields:
+                    fields[t[:-1].strip()] = strings[i + 1]
             img = card.find('img')
             imgurl = (img.get('data-src') or img.get('src')) if img is not None else None
             if imgurl and imgurl.startswith('data:'):
@@ -145,6 +154,9 @@ class PaluchScraper:
                 'image': imgurl,
                 'urgent': 'pilnej adopcji' in card.get_text(' ', strip=True).lower(),
                 'sex': '',
+                'found': fields.get('Znaleziono', ''),
+                'found_where': fields.get('Gdzie', ''),
+                'ochota': False,
             })
         return animals
 
@@ -161,13 +173,37 @@ class PaluchScraper:
         return animals
 
     def get_animals(self, species):
-        """Zwraca liste zwierzat danego gatunku ('koty' lub 'psy')."""
+        """Zwraca liste zwierzat danego gatunku ('koty' lub 'psy').
+
+        Lista do adopcji jest wymagana. Do niej dochodza ostatnio znalezione zwierzeta
+        (pole 'found'), a u kotow oznaczenie, ktore sa w punkcie Ochota na Kota (pole 'ochota').
+        Te dwie strony sa dodatkowe - gdy sie nie wczytaja, lista i tak jest zwracana.
+        """
         base = LIST_URLS[species]
         animals = self.get_list(base, referer=BASE_URL)
         if not animals:
             raise ValueError('Na stronie ' + base + ' nie znaleziono żadnych zwierząt. '
                              'Strona mogła zablokować pobieranie albo zmienić wygląd.')
-        return list(dict((a['link'], a) for a in animals).values())
+        bylink = dict((a['link'], a) for a in animals)
+        for a in self._optional_list(FOUND_URLS[species], base, 'ostatnio znalezionych'):
+            bylink.setdefault(a['link'], a)
+        if species == 'koty':
+            for a in self._optional_list(OCHOTA_URL, base, 'Ochoty na Kota'):
+                if a['link'] in bylink:
+                    bylink[a['link']]['ochota'] = True
+        return list(bylink.values())
+
+    def _optional_list(self, url, referer, what):
+        if self.blocked:
+            return []
+        try:
+            return self.get_list(url, referer=referer)
+        except BlockedError as e:
+            print('Strona blokuje zapytania (' + str(e) + '), pomijam liste ' + what)
+            self.blocked = True
+        except Exception as e:
+            print('Nie udało się pobrać listy ' + what + ': ' + str(e))
+        return []
 
     # --- strona zwierzecia ---
 
@@ -187,6 +223,13 @@ class PaluchScraper:
                 break
         for marker in cls.DESC_END:
             desc = desc.split(marker)[0]
+        # odznaki stanu zwierzecia to przyciski prowadzace do jego wlasnej strony,
+        # np. 'Do adopcji', 'Nie do adopcji', 'Ochota na kota', 'Do pilnej adopcji'
+        badges = []
+        for span in soup.select('a[href*="/animal/"] span.fusion-button-text'):
+            text = span.get_text(' ', strip=True)
+            if text and text not in badges:
+                badges.append(text)
         return {
             'sex': fields.get('Płeć', '').lower(),
             'date': fields.get('Data przyjęcia', ''),
@@ -194,6 +237,7 @@ class PaluchScraper:
             'desc': desc.strip(),
             'photos': len(soup.select('a.fusion-lightbox[data-rel^="iLightbox[gallery"]')),
             'fields': fields,
+            'badges': badges,
         }
 
     def get_details(self, link, referer=None):
