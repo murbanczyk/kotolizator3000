@@ -1,7 +1,6 @@
 import PIL
 import docx
 import glob
-import matplotlib.pyplot as plt
 import numpy as np
 import os
 import pandas as pd
@@ -26,7 +25,8 @@ from pkg_resources import resource_filename
 from threading import Thread
 from .scraper import PaluchScraper, LIST_URLS
 import matplotlib
-matplotlib.use('Agg')
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_wxagg import FigureCanvasWxAgg as FigureCanvas
 
 
 def mainGui():
@@ -380,11 +380,11 @@ class GeneralLayout(scrolled.ScrolledPanel):
             a2, _, patches2 = ax2.hist(lataR, bins2, linewidth=1, edgecolor='w', color='k')
             if kotbool:
                 ax1.set_title('Koty do 1 roku, suma: ' + str(round(sum(a1))))
-                ax2.set_title('Koty wszystkie, suma: ' + str(round(sum(a2))) + ';starsze of 8lat: ' + str(
+                ax2.set_title('Koty wszystkie, suma: ' + str(round(sum(a2))) + ', starsze od 8 lat: ' + str(
                     len(np.where(lataR >= 8)[0])))
             else:
                 ax1.set_title('Psy do 1 roku, suma: ' + str(round(sum(a1))))
-                ax2.set_title('Psy wszystkie, suma: ' + str(round(sum(a2))) + ';starsze of 8lat: ' + str(
+                ax2.set_title('Psy wszystkie, suma: ' + str(round(sum(a2))) + ', starsze od 8 lat: ' + str(
                     len(np.where(lataR >= 8)[0])))
 
         elif sex == 'f':
@@ -399,11 +399,11 @@ class GeneralLayout(scrolled.ScrolledPanel):
             if kotbool:
 
                 ax1.set_title('Kotki do 1 roku, suma: ' + str(round(sum(a1))))
-                ax2.set_title('Kotki wszystkie, suma: ' + str(round(sum(a2))) + ';starsze of 8lat: ' + str(
+                ax2.set_title('Kotki wszystkie, suma: ' + str(round(sum(a2))) + ', starsze od 8 lat: ' + str(
                     len(np.where(lataR >= 8)[0])))
             else:
                 ax1.set_title('Suczki do 1 roku, suma: ' + str(round(sum(a1))))
-                ax2.set_title('Suczki wszystkie, suma: ' + str(round(sum(a2))) + ';starsze of 8lat: ' + str(
+                ax2.set_title('Suczki wszystkie, suma: ' + str(round(sum(a2))) + ', starsze od 8 lat: ' + str(
                     len(np.where(lataR >= 8)[0])))
 
 
@@ -422,11 +422,11 @@ class GeneralLayout(scrolled.ScrolledPanel):
             if kotbool:
 
                 ax1.set_title('Kocury do 1 roku, suma: ' + str(round(sum(a1))))
-                ax2.set_title('Kocury wszystkie, suma: ' + str(round(sum(a2))) + ';starsze of 8lat: ' + str(
+                ax2.set_title('Kocury wszystkie, suma: ' + str(round(sum(a2))) + ', starsze od 8 lat: ' + str(
                     len(np.where(lataR >= 8)[0])))
             else:
                 ax1.set_title('Psy (samce) do 1 roku, suma: ' + str(round(sum(a1))))
-                ax2.set_title('Psy (samce) wszystkie, suma: ' + str(round(sum(a2))) + ';starsze of 8lat: ' + str(
+                ax2.set_title('Psy (samce) wszystkie, suma: ' + str(round(sum(a2))) + ', starsze od 8 lat: ' + str(
                     len(np.where(lataR >= 8)[0])))
 
         ax1.set_xticks(range(0, 12))
@@ -474,63 +474,45 @@ class GeneralLayout(scrolled.ScrolledPanel):
         return lata
 
     def plothist(self,event):
-        pathname = self.ask_path('Zapisz histogram', 'PNG (*.png)|*.png', self.filename('histogram', 'png'))
-        if pathname:
-            self.status('Rysowanie histogramu…')
-            self.run_task(self.plothistp, (pathname, self.getframecur(self.backup)),
-                          lambda r: 'Zapisano histogram: ' + os.path.basename(pathname))
+        self.showhist(self.getframecur(self.backup),
+                      'Wiek %s – %s' % (self.zwierzeta(), self.backup.GetStringSelection()),
+                      self.filename('histogram', 'png'))
 
     def plothistold(self,event):
         Zniknietekoty = self.comparedf(self.getframecur(self.backup2), self.getframecur(self.backup))
-        pathname = self.ask_path('Zapisz histogram zniknietych zwierząt', 'PNG (*.png)|*.png',
-                                 self.filename('histogram_znikniete', 'png', True))
-        if pathname:
-            self.status('Rysowanie histogramu…')
-            self.run_task(self.plothistp, (pathname, Zniknietekoty), lambda r: 'Zapisano histogram: ' + os.path.basename(pathname))
+        self.showhist(Zniknietekoty,
+                      'Wiek znikniętych %s – %s w porównaniu z %s' % (
+                          self.zwierzeta(), self.backup.GetStringSelection(), self.backup2.GetStringSelection()),
+                      self.filename('histogram_znikniete', 'png', True))
 
     def plothistnew(self,event):
         Nowekoty = self.comparedf(self.getframecur(self.backup), self.getframecur(self.backup2))
-        pathname = self.ask_path('Zapisz histogram nowych zwierząt', 'PNG (*.png)|*.png',
-                                 self.filename('histogram_nowe', 'png', True))
-        if pathname:
-            self.status('Rysowanie histogramu…')
-            self.run_task(self.plothistp, (pathname, Nowekoty), lambda r: 'Zapisano histogram: ' + os.path.basename(pathname))
+        self.showhist(Nowekoty,
+                      'Wiek nowych %s – %s w porównaniu z %s' % (
+                          self.zwierzeta(), self.backup.GetStringSelection(), self.backup2.GetStringSelection()),
+                      self.filename('histogram_nowe', 'png', True))
 
-    def plothistp(self,pathname,catframe):
-        # print(catframe.shape)
-        fig = plt.figure(figsize=(29, 25))
-        SMALL_SIZE = 14
-        MEDIUM_SIZE = 25
-        BIGGER_SIZE = 32
-        ax1 = fig.add_subplot(321)
-        ax2 = fig.add_subplot(322)
-        ax3 = fig.add_subplot(323)
-        ax4 = fig.add_subplot(324)
-        ax5 = fig.add_subplot(325)
-        ax6 = fig.add_subplot(326)
-        wx.CallAfter(self.postep.SetRange, 3)
+    def showhist(self, catframe, title, defaultfile):
+        try:
+            fig = self.histfigure(catframe)
+        except Exception as e:
+            wx.MessageDialog(self, str(e), 'Błąd', wx.OK | wx.ICON_ERROR).ShowModal()
+            return
+        HistFrame(self, fig, title, defaultfile).Show()
+        self.statustxt.SetLabel('Otwarto histogram: ' + title)
 
-        plt.rc('font', size=SMALL_SIZE)  # controls default text sizes
-        plt.rc('axes', titlesize=BIGGER_SIZE)  # fontsize of the axes title
-        plt.rc('axes', labelsize=MEDIUM_SIZE)  # fontsize of the x and y labels
-        plt.rc('xtick', labelsize=SMALL_SIZE)  # fontsize of the tick labels
-        plt.rc('ytick', labelsize=SMALL_SIZE)  # fontsize of the tick labels
-        plt.rc('legend', fontsize=SMALL_SIZE)  # legend fontsize
-        plt.rc('figure', titlesize=BIGGER_SIZE)  # fontsize of the figure title
-        lata = self.gencathist(catframe, ax1, ax2, 'all',self.kotybool)
-        wx.CallAfter(self.postep.SetValue, 1)
+    def histfigure(self, catframe):
+        """Rysuje histogramy wieku (wszystkie, samice, samce) i zwraca gotową figurę."""
+        sizes = {'font.size': 9, 'axes.titlesize': 11, 'axes.labelsize': 10,
+                 'xtick.labelsize': 9, 'ytick.labelsize': 9, 'legend.fontsize': 9}
+        with matplotlib.rc_context(sizes):
+            fig = Figure(figsize=(13, 11), constrained_layout=True)
+            axes = fig.subplots(3, 2)
+            self.gencathist(catframe, axes[0][0], axes[0][1], 'all', self.kotybool)
+            self.gencathist(catframe, axes[1][0], axes[1][1], 'f', self.kotybool)
+            self.gencathist(catframe, axes[2][0], axes[2][1], 'm', self.kotybool)
+        return fig
 
-        lata = self.gencathist(catframe, ax3, ax4, 'f', self.kotybool)
-        wx.CallAfter(self.postep.SetValue, 2)
-
-        lata = self.gencathist(catframe, ax5, ax6, 'm',self.kotybool)
-        wx.CallAfter(self.postep.SetValue, 3)
-
-
-        fig.savefig(pathname)
-        # fig.show()
-
-        self.openfile(pathname)
     def openfile(self, file):
         if platform.system() == 'Darwin':  # macOS
             subprocess.call(('open',file))
@@ -630,7 +612,7 @@ class GeneralLayout(scrolled.ScrolledPanel):
 
     def genwordOld(self, event):
         Zniknietekoty = self.comparedf(self.getframecur(self.backup2), self.getframecur(self.backup))
-        pathname = self.ask_path('Zapisz listę zniknietych zwierząt', 'Word (*.docx)|*.docx',
+        pathname = self.ask_path('Zapisz listę znikniętych zwierząt', 'Word (*.docx)|*.docx',
                                  self.filename('znikniete', 'docx', True))
         if pathname:
             self.status('Tworzenie dokumentu Word…')
@@ -726,6 +708,50 @@ class GeneralLayout(scrolled.ScrolledPanel):
             return home / "Library/Application Support"
 
     # create your program's directory
+
+
+class HistFrame(wx.Frame):
+    """Okno z histogramem i przyciskiem do zapisania go jako obraz."""
+
+    def __init__(self, parent, fig, title, defaultfile):
+        wx.Frame.__init__(self, parent, title=title, size=(1100, 900))
+        self.fig = fig
+        self.defaultfile = defaultfile
+        panel = wx.Panel(self)
+        self.canvas = FigureCanvas(panel, -1, fig)
+        self.canvas.SetMinSize((300, 250))  # wykres dopasowuje się do rozmiaru okna
+        save = wx.Button(panel, label='Zapisz…')
+        Tooltipset(save, 'Zapisz histogram jako obraz PNG, PDF lub SVG')
+        close = wx.Button(panel, label='Zamknij')
+        save.Bind(wx.EVT_BUTTON, self.save)
+        close.Bind(wx.EVT_BUTTON, lambda e: self.Close())
+        buttons = wx.BoxSizer(wx.HORIZONTAL)
+        buttons.Add(save, 0, wx.RIGHT, 8)
+        buttons.Add(close, 0)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(self.canvas, 1, wx.EXPAND)
+        sizer.Add(buttons, 0, wx.ALL | wx.ALIGN_RIGHT, 8)
+        panel.SetSizer(sizer)
+        self.CreateStatusBar()
+        self.SetStatusText('Histogram nie jest jeszcze zapisany – kliknij „Zapisz…”, aby zapisać go do pliku.')
+        self.Centre()
+
+    def save(self, event):
+        with wx.FileDialog(self, 'Zapisz histogram', defaultFile=self.defaultfile,
+                           wildcard='PNG (*.png)|*.png|PDF (*.pdf)|*.pdf|SVG (*.svg)|*.svg',
+                           style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT) as dialog:
+            if dialog.ShowModal() == wx.ID_CANCEL:
+                return
+            path = dialog.GetPath()
+        ext = ('.png', '.pdf', '.svg')[dialog.GetFilterIndex()]
+        if not os.path.splitext(path)[1]:
+            path += ext
+        try:
+            self.fig.savefig(path, dpi=150)
+        except Exception as e:
+            wx.MessageDialog(self, str(e), 'Błąd', wx.OK | wx.ICON_ERROR).ShowModal()
+            return
+        self.SetStatusText('Zapisano: ' + path)
 
 
 class CatFrame(wx.Frame):
