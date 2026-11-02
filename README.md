@@ -1,6 +1,43 @@
 ### Kotolizator 3000
-Program do analizy strony Schoniska na Paluchu. Umożliwia utworzenie zestawień kotów i psów w schonisku plus zrobienie podstawowych statystyk.
-Program używa jedynie danych dostępnych publicznie na stronie https://napaluchu.waw.pl/.  Zadaniem programu jest ułatwienie życia wolontariuszom schroniska
+Program do analizy strony Schroniska na Paluchu. Umożliwia utworzenie zestawień kotów i psów w schronisku plus zrobienie podstawowych statystyk.
+Program używa jedynie danych dostępnych publicznie na stronie https://napaluchu.waw.pl/.  Zadaniem programu jest ułatwienie życia wolontariuszom schroniska.
+
+#### Co potrafi
+- pobiera aktualną listę kotów lub psów ze strony schroniska i zapisuje ją pod dzisiejszą datą,
+- **Przeglądaj i szukaj** – tabela wszystkich zwierząt z wyszukiwarką (imię, numer, wiek, płeć, miejsce) i sortowaniem po kliknięciu nagłówka; widoczne wiersze można zapisać do Excela,
+- **Najdłużej czekające** – ta sama tabela posortowana według liczby dni w schronisku (warto je promować),
+- lista zwierząt w Wordzie (ze zdjęciami, pilne adopcje na czerwono, Ochota na Kota na fioletowo), krótka tabelka w Excelu, histogramy wieku i liczba zwierząt w poszczególnych miejscach,
+- porównanie dwóch dni: które zwierzęta są nowe, a które zniknęły z listy (np. zostały adoptowane),
+- wykres liczby zwierząt w czasie ze wszystkich zapisanych dni.
+
+#### Instalacja i uruchomienie
+Potrzebny jest Python 3.8 lub nowszy.
+```
+pip install -r requirements.txt
+python Kotolizator3000.py
+```
+W Anacondzie wxPython najłatwiej zainstalować poleceniem `conda install -c conda-forge wxpython`.
+
+Zapisane dni i pamięć podręczna są w katalogu `kotolizator` w:
+- macOS: `~/Library/Application Support`,
+- Windows: `C:\Users\<użytkownik>\AppData\Roaming`,
+- Linux: `~/.local/share`.
+
+#### Testy
+```
+pip install -r requirements-dev.txt
+python -m pytest
+```
+Testy parsera korzystają z zapisanych fragmentów prawdziwych stron w `tests/fixtures`. Gdy strona schroniska zmieni wygląd, wystarczy zapisać nowe strony do tego katalogu i uruchomić testy, żeby zobaczyć, co trzeba poprawić.
+
+#### Aplikacja dla osób bez Pythona
+Gotową aplikację (macOS: `Kotolizator3000.app`, Windows: katalog z `Kotolizator3000.exe`) buduje się na danym systemie poleceniem:
+```
+pip install -r requirements-dev.txt
+pyinstaller --noconfirm --windowed --name Kotolizator3000 --icon analizatorkotow/icon.ico --add-data "analizatorkotow/splash.png:analizatorkotow" --add-data "analizatorkotow/icon.ico:analizatorkotow" Kotolizator3000.py
+```
+Wynik jest w katalogu `dist`. Aplikację dla macOS trzeba zbudować na Macu, a dla Windows na Windows.
+Na macOS przy pierwszym uruchomieniu niepodpisanej aplikacji trzeba kliknąć ją prawym przyciskiem i wybrać „Otwórz”.
 
 #### Oszczędzanie połączeń
 Lista zwierząt (`/zwierzeta/koty-do-adopcji/` lub `/zwierzeta/psy-do-adopcji/`) to jedno zapytanie – są na niej imię, numer, wiek, zdjęcie i oznaczenie „do pilnej adopcji”.

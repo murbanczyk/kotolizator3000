@@ -1,0 +1,4 @@
+# Dodatkowo do testów i budowania aplikacji
+-r requirements.txt
+pytest>=7
+pyinstaller>=5
