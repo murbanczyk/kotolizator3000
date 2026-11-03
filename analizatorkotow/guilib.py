@@ -666,6 +666,8 @@ class BrowseFrame(wx.Frame):
     COLUMNS = [('Nr', 45), ('ID', 75), ('Imię', 130), ('Płeć', 70), ('Wiek', 95), ('Przyjęto', 90),
                ('Dni w schronisku', 135), ('Pilne', 50), ('Miejsce', 120), ('Status', 380)]
     NUMERIC = {'Nr': 'Nr', 'Dni w schronisku': 'Dni w schronisku', 'Wiek': '_wiek'}
+    URGENT_COLOUR = (248, 221, 215)  # pilne adopcje
+    HOVER_COLOUR = (190, 222, 250)   # wiersz, którego zdjęcie jest właśnie wyświetlane
 
     def __init__(self, parent, table, title, defaultfile, sort_col=None, descending=False):
         wx.Frame.__init__(self, parent, title=title, size=window_size(parent, 1300, 700))
@@ -720,15 +722,28 @@ class BrowseFrame(wx.Frame):
             self.on_leave(event)
             return
         if row != self.hover_row:
+            self.unhighlight()
             self.hover_row = row
             r = self.visible.iloc[row]
             caption = ('%s (%s)' % (r['Imię'], r['ID']) if r['Imię'] else r['ID']) + ('\n' + r['Wiek'] if r['Wiek'] else '')
-            if not self.preview.show(r.get('_foto'), caption, wx.GetMousePosition()):
+            if self.preview.show(r.get('_foto'), caption, wx.GetMousePosition()):
+                self.list.SetItemBackgroundColour(row, wx.Colour(*self.HOVER_COLOUR))
+            else:
                 self.preview.Hide()
         else:
             self.preview.move_near(wx.GetMousePosition())
 
+    def row_colour(self, row):
+        return wx.Colour(*self.URGENT_COLOUR) if self.visible.iloc[row]['Pilne'] else self.list.GetBackgroundColour()
+
+    def unhighlight(self):
+        """Przywraca zwykły kolor wiersza, który był podświetlony."""
+        row = self.hover_row
+        if 0 <= row < min(self.list.GetItemCount(), len(self.visible)):
+            self.list.SetItemBackgroundColour(row, self.row_colour(row))
+
     def on_leave(self, event):
+        self.unhighlight()
         self.hover_row = -1
         if self.preview.IsShown():
             self.preview.Hide()
@@ -752,8 +767,8 @@ class BrowseFrame(wx.Frame):
             missing = table[key].isna()
             ordered = table[~missing].sort_values(key, ascending=not self.descending, kind='stable')
             table = pd.concat([ordered, table[missing]])  # brak danych zawsze na końcu
+        self.on_leave(None)  # zdejmij podświetlenie, zanim zmieni się zawartość tabeli
         self.visible = table
-        self.on_leave(None)
         self.list.DeleteAllItems()
         for i, (_, r) in enumerate(table.iterrows()):
             values = ['' if pd.isna(r[c]) else str(int(r[c]) if isinstance(r[c], float) else r[c])
@@ -762,7 +777,7 @@ class BrowseFrame(wx.Frame):
             for j, v in enumerate(values[1:], start=1):
                 self.list.SetItem(i, j, v)
             if r['Pilne']:
-                self.list.SetItemBackgroundColour(i, wx.Colour(248, 221, 215))
+                self.list.SetItemBackgroundColour(i, wx.Colour(*self.URGENT_COLOUR))
         for i, (name, _) in enumerate(self.COLUMNS):
             arrow = (' ▼' if self.descending else ' ▲') if name == self.sort_col else ''
             column = self.list.GetColumn(i)

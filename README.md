@@ -4,7 +4,7 @@ Program używa jedynie danych dostępnych publicznie na stronie https://napaluch
 
 #### Co potrafi
 - pobiera aktualną listę kotów lub psów do adopcji ze strony schroniska razem z ostatnio znalezionymi zwierzętami i zapisuje ją pod dzisiejszą datą; koty przebywające w punkcie Ochota na Kota są oznaczane,
-- **Przeglądaj i szukaj** – tabela wszystkich zwierząt (po najechaniu myszką na wiersz pokazuje się zdjęcie) z wyszukiwarką (imię, numer, wiek, płeć, miejsce, status – np. „Nie do adopcji” albo „znaleziony”) i sortowaniem po kliknięciu nagłówka; widoczne wiersze można zapisać do Excela,
+- **Przeglądaj i szukaj** – tabela wszystkich zwierząt (po najechaniu myszką na wiersz pokazuje się zdjęcie, a wiersz jest podświetlony) z wyszukiwarką (imię, numer, wiek, płeć, miejsce, status – np. „Nie do adopcji” albo „znaleziony”) i sortowaniem po kliknięciu nagłówka; widoczne wiersze można zapisać do Excela,
 - **Najdłużej czekające** – ta sama tabela posortowana według liczby dni w schronisku (warto je promować),
 - lista zwierząt w Wordzie (ze zdjęciami, pilne adopcje na czerwono, Ochota na Kota na fioletowo), krótka tabelka w Excelu, histogramy wieku i liczba zwierząt w poszczególnych miejscach,
 - porównanie dwóch dni: które zwierzęta są nowe, a które zniknęły z listy (np. zostały adoptowane),
