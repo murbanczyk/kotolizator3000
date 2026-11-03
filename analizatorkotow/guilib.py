@@ -684,6 +684,16 @@ class BrowseFrame(wx.Frame):
         for i, (name, width) in enumerate(self.COLUMNS):
             self.list.InsertColumn(i, name, width=width)
         self.list.Bind(wx.EVT_LIST_COL_CLICK, self.on_col_click)
+        # podgląd zdjęcia po najechaniu myszką na wiersz; w wersji „generic” (macOS, Linux)
+        # wiersze są w osobnym wewnętrznym oknie i HitTest liczy pozycję względem niego
+        self.preview = ThumbPopup(self)
+        self.hover_row = -1
+        rows_window = self.list.GetMainWindow() if hasattr(self.list, 'GetMainWindow') else None
+        self.rows_window = rows_window or self.list
+        self.rows_window.Bind(wx.EVT_MOTION, self.on_motion)
+        self.rows_window.Bind(wx.EVT_LEAVE_WINDOW, self.on_leave)
+        self.list.Bind(wx.EVT_MOUSEWHEEL, lambda e: (self.on_leave(e), e.Skip()))
+        self.Bind(wx.EVT_ACTIVATE, lambda e: (e.GetActive() or self.on_leave(e), e.Skip()))
         self.info = wx.StaticText(panel, label='')
         save = wx.Button(panel, label='Zapisz widoczne do Excela…')
         Tooltipset(save, 'Zapisuje do pliku Excel zwierzęta widoczne w tabeli, w tej samej kolejności')
@@ -701,6 +711,27 @@ class BrowseFrame(wx.Frame):
         panel.SetSizer(sizer)
         self.Centre()
         self.refresh()
+
+    def on_motion(self, event):
+        event.Skip()
+        result = self.list.HitTest(self.rows_window.ScreenToClient(wx.GetMousePosition()))
+        row = result[0] if isinstance(result, tuple) else result
+        if row < 0 or row >= len(self.visible):
+            self.on_leave(event)
+            return
+        if row != self.hover_row:
+            self.hover_row = row
+            r = self.visible.iloc[row]
+            caption = ('%s (%s)' % (r['Imię'], r['ID']) if r['Imię'] else r['ID']) + ('\n' + r['Wiek'] if r['Wiek'] else '')
+            if not self.preview.show(r.get('_foto'), caption, wx.GetMousePosition()):
+                self.preview.Hide()
+        else:
+            self.preview.move_near(wx.GetMousePosition())
+
+    def on_leave(self, event):
+        self.hover_row = -1
+        if self.preview.IsShown():
+            self.preview.Hide()
 
     def on_col_click(self, event):
         col = self.COLUMNS[event.GetColumn()][0]
@@ -722,6 +753,7 @@ class BrowseFrame(wx.Frame):
             ordered = table[~missing].sort_values(key, ascending=not self.descending, kind='stable')
             table = pd.concat([ordered, table[missing]])  # brak danych zawsze na końcu
         self.visible = table
+        self.on_leave(None)
         self.list.DeleteAllItems()
         for i, (_, r) in enumerate(table.iterrows()):
             values = ['' if pd.isna(r[c]) else str(int(r[c]) if isinstance(r[c], float) else r[c])
@@ -736,7 +768,8 @@ class BrowseFrame(wx.Frame):
             column = self.list.GetColumn(i)
             column.SetText(name + arrow)
             self.list.SetColumn(i, column)
-        self.info.SetLabel('Pokazano %d z %d. Kliknij nagłówek kolumny, aby posortować.'
+        self.info.SetLabel('Pokazano %d z %d. Kliknij nagłówek kolumny, aby posortować; '
+                           'najedź myszką na zwierzę, aby zobaczyć zdjęcie.'
                            % (len(table), len(self.table)))
 
     def save(self, event):
@@ -753,6 +786,50 @@ class BrowseFrame(wx.Frame):
             error_dialog(self, e)
             return
         self.info.SetLabel('Zapisano: ' + os.path.basename(path))
+
+
+class ThumbPopup(wx.PopupWindow):
+    """Małe okienko ze zdjęciem zwierzęcia wyświetlane obok kursora."""
+
+    OFFSET = 18  # odległość od kursora, żeby okienko go nie zasłaniało
+
+    def __init__(self, parent):
+        wx.PopupWindow.__init__(self, parent, wx.BORDER_SIMPLE)
+        self.SetBackgroundColour(wx.WHITE)
+        self.bitmap = wx.StaticBitmap(self)
+        self.caption = wx.StaticText(self)
+        self.caption.SetForegroundColour(wx.BLACK)
+        sizer = wx.BoxSizer(wx.VERTICAL)
+        sizer.Add(self.bitmap, 0, wx.ALL, 4)
+        sizer.Add(self.caption, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 4)
+        self.SetSizer(sizer)
+        self.cache = {}
+
+    def show(self, image, caption, mouse):
+        """Pokazuje zdjęcie obok kursora; False, gdy zwierzę nie ma zdjęcia."""
+        if image is None or not hasattr(image, 'size'):
+            return False
+        key = id(image)
+        if key not in self.cache:
+            rgb = image.convert('RGB')
+            self.cache[key] = wx.Bitmap(wx.Image(rgb.size[0], rgb.size[1], rgb.tobytes()))
+        self.bitmap.SetBitmap(self.cache[key])
+        self.caption.SetLabel(caption)
+        self.GetSizer().Fit(self)
+        self.move_near(mouse)
+        if not self.IsShown():
+            self.Show()
+        return True
+
+    def move_near(self, mouse):
+        w, h = self.GetSize()
+        area = wx.Display(max(wx.Display.GetFromPoint(mouse), 0)).GetClientArea()
+        x, y = mouse.x + self.OFFSET, mouse.y + self.OFFSET
+        if x + w > area.GetRight():
+            x = mouse.x - self.OFFSET - w  # przy prawej krawędzi ekranu – na lewo od kursora
+        if y + h > area.GetBottom():
+            y = mouse.y - self.OFFSET - h  # przy dolnej krawędzi – nad kursorem
+        self.SetPosition((x, y))
 
 
 class ChartCanvas(wx.Panel):

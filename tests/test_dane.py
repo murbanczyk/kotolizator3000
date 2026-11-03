@@ -120,3 +120,12 @@ def test_trend():
     assert list(t['Liczba']) == [2, 3]
     assert t.iloc[1]['Nowe'] == 2 and t.iloc[1]['Zniknięte'] == 1
     assert pd.isna(t.iloc[0]['Nowe'])
+
+
+def test_summary_keeps_thumbnail_for_preview():
+    from PIL import Image
+    f = frame(['0958/26', '0959/26'])
+    f.at[0, 'Foto'] = Image.new('RGB', (150, 112))
+    s = dane.summary(f)
+    assert s.iloc[0]['_foto'].size == (150, 112)
+    assert s.iloc[1]['_foto'] is None  # brak zdjęcia - podgląd się nie pokazuje

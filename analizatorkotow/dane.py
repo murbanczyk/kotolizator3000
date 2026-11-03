@@ -159,8 +159,9 @@ def summary(frame, today=None):
             'Miejsce': miejsce(r['Przyjęcie']),
             'Status': status(r['Przyjęcie']),
             '_wiek': age_months(r['Wiek']),
+            '_foto': r['Foto'] if hasattr(r['Foto'], 'size') else None,  # miniatura do podglądu
         })
-    return pd.DataFrame(rows, columns=SUMMARY_COLUMNS + ['_wiek'])
+    return pd.DataFrame(rows, columns=SUMMARY_COLUMNS + ['_wiek', '_foto'])
 
 
 def trend(days):
