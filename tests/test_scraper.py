@@ -165,3 +165,50 @@ def test_blocked_stops_downloading(tmp_path):
     assert details is None and not new and sc.blocked
     sc.get_details('https://napaluchu.waw.pl/animal/0002-26k/')
     assert len(calls) == 1
+
+
+def image_bytes():
+    import io
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new('RGB', (300, 200), 'red').save(buf, 'JPEG')
+    return buf.getvalue()
+
+
+def test_thumbnails_in_background(tmp_path):
+    sc, page_calls = make_scraper(tmp_path, {})
+    image_calls = []
+
+    def get_image(url, headers=None, timeout=None):
+        image_calls.append(url)
+        return FakeResponse(content=image_bytes())
+    sc.image_session.get = get_image
+    sc.image_delay = (0, 0)
+    urls = ['https://images.napaluchu.waw.pl/%d.jpg' % i for i in range(5)]
+    futures = [sc.thumbnail_later(u) for u in urls]
+    images = [f.result() for f in futures]
+    sc.close()
+    assert image_calls == urls and page_calls == []  # zdjęcia idą osobną sesją
+    assert images[0].size == (150, 100)
+    sc.save_cache()
+
+    # drugie uruchomienie: zdjęcia z pamięci podręcznej, gotowe od razu i bez zapytań
+    sc2, _ = make_scraper(tmp_path, {})
+    sc2.image_session.get = lambda *a, **k: pytest.fail('nie powinno być zapytania')
+    future = sc2.thumbnail_later(urls[0])
+    assert future.done() and future.result().size == (150, 100)
+    sc2.close()
+
+
+def test_blocked_image_server_does_not_stop_pages(tmp_path):
+    with open(os.path.join(FIXTURES, 'zwierze.html'), encoding='utf-8') as f:
+        zwierze = f.read()
+    sc, page_calls = make_scraper(tmp_path, {'/animal/': FakeResponse(zwierze)})
+    sc.image_session.get = lambda *a, **k: FakeResponse(status=403)
+    sc.image_delay = (0, 0)
+    blank = sc.thumbnail_later('https://images.napaluchu.waw.pl/1.jpg').result()
+    assert sc.images_blocked and blank.size == (150, 112)  # pusty obrazek zamiast zdjęcia
+    assert sc.thumbnail_later('https://images.napaluchu.waw.pl/2.jpg').done()
+    details, new = sc.get_details('https://napaluchu.waw.pl/animal/0958-26k/')
+    assert new and details['sex'] == 'samiec' and not sc.blocked
+    sc.close()

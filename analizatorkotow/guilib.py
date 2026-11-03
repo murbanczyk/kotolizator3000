@@ -356,19 +356,28 @@ class GeneralLayout(scrolled.ScrolledPanel):
         scraper = PaluchScraper(self.my_datadir2 + 'cache.kotolizer')
         animals = scraper.get_animals(species)
         wx.CallAfter(self.postep.SetRange, len(animals))
-        rows = []
+        pending = []
         fetched = 0
-        for count, a in enumerate(animals):
-            self.status('Zwierzę %d z %d: %s' % (count + 1, len(animals), a['name'] or a['number']))
-            details, new = scraper.get_details(a['link'], referer=LIST_URLS[species])
-            if new:
-                fetched += 1
-                if fetched % 20 == 0:
-                    scraper.save_cache()
-            image = scraper.get_thumbnail(a['image'], referer=a['link'])
-            rows.append(dane.build_row(count + 1, a, details, image))
-            wx.CallAfter(self.postep.SetValue, count + 1)
-        scraper.save_cache()
+        try:
+            for count, a in enumerate(animals):
+                self.status('Zwierzę %d z %d: %s' % (count + 1, len(animals), a['name'] or a['number']))
+                # zdjęcie pobiera się w tle, równolegle ze stroną zwierzęcia
+                image = scraper.thumbnail_later(a['image'], referer=a['link'])
+                details, new = scraper.get_details(a['link'], referer=LIST_URLS[species])
+                if new:
+                    fetched += 1
+                    if fetched % 20 == 0:
+                        scraper.save_cache()
+                pending.append((a, details, image))
+                wx.CallAfter(self.postep.SetValue, count + 1)
+            rows = []
+            for count, (a, details, image) in enumerate(pending):
+                if not image.done():
+                    self.status('Kończę pobieranie zdjęć: %d z %d' % (count + 1, len(pending)))
+                rows.append(dane.build_row(count + 1, a, details, image.result()))
+        finally:
+            scraper.close()
+            scraper.save_cache()
         print('Zwierząt: %d, pobranych stron zwierząt: %d' % (len(animals), fetched))
         catframe = pd.DataFrame(rows, columns=dane.COLUMNS)
         catframe.to_pickle(self.my_datadir2 + self.prefix() + self.today + '.kotolizer', compression='bz2')

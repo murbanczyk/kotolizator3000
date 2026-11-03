@@ -43,5 +43,6 @@ Na macOS przy pierwszym uruchomieniu niepodpisanej aplikacji trzeba kliknąć j�
 Lista zwierząt (`/zwierzeta/koty-do-adopcji/` lub `/zwierzeta/psy-do-adopcji/`) to jedno zapytanie – są na niej imię, numer, wiek, zdjęcie i oznaczenie „do pilnej adopcji”.
 Do tego jedno zapytanie o ostatnio znalezione zwierzęta danego gatunku (`/zwierzeta/ostatnio-znalezione/gatunek-kot/` lub `gatunek-pies/`), a dla kotów jedno o stronę `/o-schronisku/ochota-na-kota/`, na której są koty przebywające w tym punkcie.
 Strona każdego zwierzęcia (płeć, data przyjęcia, lokalizacja, status, opis, liczba zdjęć) jest pobierana raz i trzymana w pamięci podręcznej przez 7 dni, a miniatury zdjęć są pobierane tylko raz (`cache.kotolizer` w katalogu danych programu).
-Pierwsze uruchomienie pobiera wszystko (kilka minut), kolejne – tylko listę i nowe zwierzaki.
-Pobieranie korzysta z jednej sesji HTTP, robi przerwy z losowym odstępem między zapytaniami i ponawia je z rosnącym opóźnieniem przy błędach 429/5xx. Jeśli strona zacznie blokować zapytania (403/429), program przestaje pobierać i korzysta z danych z pamięci podręcznej.
+Zdjęcia są na osobnym serwerze (`images.napaluchu.waw.pl`), więc pobierają się w tle, równolegle ze stronami zwierząt i z krótszymi przerwami – na każdy serwer idzie naraz najwyżej jedno zapytanie.
+Pierwsze uruchomienie pobiera wszystko (koty ok. 7 minut, psy ok. 15 minut), kolejne – tylko listy i nowe zwierzaki.
+Pobieranie korzysta z jednej sesji HTTP, robi przerwy z losowym odstępem między zapytaniami i ponawia je z rosnącym opóźnieniem przy błędach 429/5xx. Jeśli strona albo serwer zdjęć zacznie blokować zapytania (403/429), program przestaje pobierać z tego serwera i korzysta z danych z pamięci podręcznej.

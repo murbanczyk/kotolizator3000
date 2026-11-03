@@ -2,7 +2,9 @@ import bz2
 import pickle
 import random
 import re
+import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from io import BytesIO
 from urllib.parse import urljoin
 
@@ -50,34 +52,48 @@ class PaluchScraper:
     zwierzecia - ta jest pobierana raz i trzymana w pamieci podrecznej przez
     details_days dni. Miniatury zdjec sa pobierane tylko raz.
 
-    - jedna sesja HTTP (keep-alive), naglowki przegladarki i Referer,
+    - jedna sesja HTTP (keep-alive) do stron i osobna do zdjec, naglowki przegladarki i Referer,
     - odstepy z losowym jitterem i ponawianie z backoffem
       (z respektowaniem Retry-After) przy 429/5xx,
-    - po 403/429 nic wiecej nie jest pobierane; uzywane sa dane z pamieci
-      podrecznej (nawet starsze), a brakujace zdjecia zastepuje pusty obrazek.
+    - zdjecia sa na osobnym serwerze (images.napaluchu.waw.pl), wiec pobiera je
+      jeden watek w tle z krotszymi odstepami, rownolegle ze stronami zwierzat;
+      na kazdy serwer idzie naraz najwyzej jedno zapytanie,
+    - po 403/429 nic wiecej nie jest pobierane z danego serwera; uzywane sa dane
+      z pamieci podrecznej (nawet starsze), a brakujace zdjecia zastepuje pusty obrazek.
     """
 
     DETAIL_LABELS = ('Typ rasy', 'Płeć', 'Data przyjęcia', 'Wiek', 'Identyfikator', 'Grupa Zwierząt',
                      'Waga', 'Lokalizacja (boks)', 'Kastracja')
     DESC_END = ('Zapraszamy do', 'Planujesz adopcję', 'Poradnik:', 'Zapraszamy do zapoznania się z ankietą')
 
-    def __init__(self, cache_path, details_days=7, delay=(1.0, 2.5)):
+    def __init__(self, cache_path, details_days=7, delay=(1.0, 2.5), image_delay=(0.1, 0.4)):
         self.cache_path = str(cache_path)
         self.details_max_age = details_days * 24 * 3600
         self.delay = delay
+        self.image_delay = image_delay
         self._last_request = 0.0
-        self.blocked = False
-        self.session = requests.Session()
-        self.session.headers.update(HEADERS)
-        retry = Retry(total=4, backoff_factor=2, status_forcelist=(429, 500, 502, 503, 504),
-                      allowed_methods=('GET',), respect_retry_after_header=True,
-                      raise_on_status=False)
-        adapter = HTTPAdapter(max_retries=retry, pool_connections=2, pool_maxsize=1)
-        self.session.mount('https://', adapter)
-        self.session.mount('http://', adapter)
+        self._last_image_request = 0.0
+        self.blocked = False         # strona schroniska blokuje zapytania
+        self.images_blocked = False  # serwer zdjec blokuje zapytania
+        self.session = self._new_session()
+        self.image_session = self._new_session()
+        self._lock = threading.Lock()
+        self._image_worker = None
         cache = self._load_cache()
         self.images = cache.get('images', {})    # url zdjecia -> miniatura w PNG
         self.details = cache.get('details', {})  # link do zwierzecia -> dane ze strony zwierzecia
+
+    @staticmethod
+    def _new_session():
+        session = requests.Session()
+        session.headers.update(HEADERS)
+        retry = Retry(total=4, backoff_factor=2, status_forcelist=(429, 500, 502, 503, 504),
+                      allowed_methods=('GET',), respect_retry_after_header=True,
+                      raise_on_status=False)
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=1, pool_maxsize=1)
+        session.mount('https://', adapter)
+        session.mount('http://', adapter)
+        return session
 
     # --- pamiec podreczna ---
 
@@ -89,15 +105,18 @@ class PaluchScraper:
             return {}
 
     def save_cache(self):
+        with self._lock:  # zdjecia moga byc wlasnie dopisywane przez watek w tle
+            data = {'images': dict(self.images), 'details': dict(self.details)}
         try:
             with bz2.open(self.cache_path, 'wb') as f:
-                pickle.dump({'images': self.images, 'details': self.details}, f)
+                pickle.dump(data, f)
         except Exception as e:
             print('Nie udalo sie zapisac cache: ' + str(e))
 
     # --- HTTP ---
 
     def _get(self, url, referer=None):
+        """Strona schroniska (z dluzszymi odstepami)."""
         wait = random.uniform(*self.delay) - (time.time() - self._last_request)
         if wait > 0:
             time.sleep(wait)
@@ -106,6 +125,22 @@ class PaluchScraper:
             response = self.session.get(url, headers=headers, timeout=30)
         finally:
             self._last_request = time.time()
+        return self._check(response, url)
+
+    def _get_image(self, url, referer=None):
+        """Zdjecie z serwera zdjec (krotsze odstepy, osobna sesja)."""
+        wait = random.uniform(*self.image_delay) - (time.time() - self._last_image_request)
+        if wait > 0:
+            time.sleep(wait)
+        headers = {'Referer': referer} if referer else None
+        try:
+            response = self.image_session.get(url, headers=headers, timeout=30)
+        finally:
+            self._last_image_request = time.time()
+        return self._check(response, url)
+
+    @staticmethod
+    def _check(response, url):
         if response.status_code in (403, 429):
             raise BlockedError('%d dla %s' % (response.status_code, url))
         response.raise_for_status()
@@ -263,20 +298,22 @@ class PaluchScraper:
 
     def get_thumbnail(self, url, referer=None, fixed_height=150):
         """Miniatura zdjecia; pobierana tylko raz, potem brana z pamieci podrecznej."""
-        data = self.images.get(url) if url else None
-        if data is None and url and not self.blocked:
+        with self._lock:
+            data = self.images.get(url) if url else None
+        if data is None and url and not self.images_blocked:
             try:
-                image = Image.open(BytesIO(self._get(url, referer=referer).content))
+                image = Image.open(BytesIO(self._get_image(url, referer=referer).content))
                 height_percent = (fixed_height / float(image.size[0]))
                 width_size = int((float(image.size[1]) * float(height_percent)))
                 image = image.convert('RGB').resize((fixed_height, width_size), Image.NEAREST)
                 buf = BytesIO()
                 image.save(buf, format='PNG')
                 data = buf.getvalue()
-                self.images[url] = data
+                with self._lock:
+                    self.images[url] = data
             except BlockedError as e:
-                print('Strona blokuje zapytania (' + str(e) + '), dalej używam tylko pamięci podręcznej')
-                self.blocked = True
+                print('Serwer zdjęć blokuje zapytania (' + str(e) + '), pozostałe zdjęcia pomijam')
+                self.images_blocked = True
             except Exception as e:
                 print('Problem ze zdjęciem ' + str(url) + ': ' + str(e))
         if data is None:
@@ -284,3 +321,24 @@ class PaluchScraper:
         image = Image.open(BytesIO(data))
         image.load()
         return image
+
+    def thumbnail_later(self, url, referer=None):
+        """Zleca pobranie miniatury w tle i od razu zwraca Future z obrazkiem.
+
+        Zdjecie z pamieci podrecznej (albo brak zdjecia) jest gotowe od razu, bez watku.
+        """
+        with self._lock:
+            cached = not url or url in self.images
+        if cached or self.images_blocked:
+            done = Future()
+            done.set_result(self.get_thumbnail(url, referer))
+            return done
+        if self._image_worker is None:
+            self._image_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix='zdjecia')
+        return self._image_worker.submit(self.get_thumbnail, url, referer)
+
+    def close(self):
+        """Czeka na zlecone zdjecia i zamyka watek w tle."""
+        if self._image_worker is not None:
+            self._image_worker.shutdown(wait=True)
+            self._image_worker = None
